@@ -126,6 +126,8 @@ export type Difficulty = "easy" | "normal" | "hard" | "random";
 /** パラメータの組 (プリセット) がある難易度 */
 export type PresetDifficulty = Exclude<Difficulty, "random">;
 export const DIFFICULTIES: Difficulty[] = ["easy", "normal", "hard", "random"];
+/** 開始画面で最初に選ばれている難易度 (プレイヤーがまだ選んでいないとき) */
+export const DEFAULT_DIFFICULTY: Difficulty = "random";
 
 /** 開始画面に出す説明 */
 export const DIFFICULTY_INFO: Record<Difficulty, { label: string; summary: string }> = {

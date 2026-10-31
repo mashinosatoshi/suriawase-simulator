@@ -1,6 +1,7 @@
 import { config as zodConfig } from "zod";
 import { createLocalBackend, createRemoteBackend, type Action, type Backend } from "./backend.js";
 import {
+  DEFAULT_DIFFICULTY,
   DIFFICULTIES,
   DIFFICULTY_INFO,
   DIFFICULTY_PRESETS,
@@ -515,7 +516,8 @@ function storyDialog(s: PublicState) {
   const tuned = h("span", { class: "tuned" });
   const showTuned = () => (tuned.textContent = tunedParams ? "パラメータを調整済み" : "");
   // 難易度を選び直したら、微調整は初期値に戻す
-  const level = difficultyPicker(chosenDifficulty ?? s.difficulty ?? "normal", (d) => {
+  // まだ選んでいなければ、最初はランダム (遊んでいるゲームがあれば、その難易度)
+  const level = difficultyPicker(chosenDifficulty ?? (s.scenario ? s.difficulty : DEFAULT_DIFFICULTY), (d) => {
     chosenDifficulty = d;
     tunedParams = null;
     showTuned();
