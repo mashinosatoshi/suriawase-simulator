@@ -83,9 +83,12 @@ aside { min-height: 0; overflow-y: auto; display: grid; gap: 14px; align-content
 .cast .mood { margin-left: auto; font-size: 12px; color: var(--muted); }
 .concern { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; font-size: 13px; line-height: 1.55; background: var(--panel2); }
 .concern + .concern { margin-top: 8px; }
-.concern .top { display: flex; gap: 6px; align-items: center; margin-bottom: 2px; }
+.concern .top { display: flex; flex-wrap: wrap; gap: 2px 6px; align-items: center; margin-bottom: 2px; }
 .concern .cat { font-size: 11px; color: var(--muted); border: 1px solid var(--line); border-radius: 6px; padding: 0 6px; }
-.concern .st { margin-left: auto; font-size: 11px; font-weight: 600; }
+.concern .st { margin-left: auto; font-size: 11px; font-weight: 600; white-space: nowrap; }
+.concern .imp { font-size: 11px; color: var(--muted); white-space: nowrap; }
+.concern .imp.high { color: var(--accent-ink); font-weight: 600; }
+.concern .imp.must { color: var(--warn); font-weight: 700; }
 .concern.hidden { border-style: dashed; color: var(--muted); }
 .empty { color: var(--muted); font-size: 13px; line-height: 1.6; }
 .briefing { margin-top: 6px; }
@@ -116,7 +119,7 @@ aside { min-height: 0; overflow-y: auto; display: grid; gap: 14px; align-content
 .aisum button { font-size: 12px; padding: 2px 10px; }
 .diff { display: grid; gap: 4px; font-size: 13px; color: var(--muted); }
 .seg { display: flex; gap: 0; justify-self: start; }
-.seg button { border-radius: 0; min-width: 84px; }
+.seg button { border-radius: 0; min-width: 76px; }
 .seg button + button { border-left-width: 0; }
 .seg button:first-child { border-radius: 8px 0 0 8px; }
 .seg button:last-child { border-radius: 0 8px 8px 0; }
@@ -130,7 +133,7 @@ details.params summary { cursor: pointer; color: var(--accent-ink); font-size: 1
 .pbody { display: grid; gap: 10px; margin-top: 10px; }
 .pgroup { display: grid; gap: 8px; }
 .pgroup h3 { font-size: 13px; color: var(--accent-ink); margin: 4px 0 0; }
-.prow { display: grid; grid-template-columns: 1fr 80px; gap: 2px 10px; align-items: center; font-size: 13px; color: var(--text); }
+.prow { display: grid; grid-template-columns: 1fr 132px; gap: 2px 10px; align-items: center; font-size: 13px; color: var(--text); }
 .prow small { grid-column: 1 / -1; color: var(--muted); font-size: 12px; line-height: 1.5; }
 .prow.changed .plabel, .prow.changed small { color: var(--accent-ink); }
 .concern .sub.advice { color: var(--accent-ink); }

@@ -1,8 +1,10 @@
-import { difficultyBrief, difficultyLabel, UNDERSTANDING_TEXT, type DifficultyBrief } from "./difficulty.js";
+import { defaultParams, difficultyBrief, difficultyLabel, isCustomized, trustName, understandingNote, type DifficultyBrief } from "./difficulty.js";
 import {
   DIFFICULTY_PRESETS,
+  MAX_LEVEL,
   MAX_PLAYER_TEXT,
-  MAX_TRUST,
+  MIN_LEVEL,
+  NON_NEGOTIABLE,
   type ConcernStatus,
   type Difficulty,
   type DifficultyParams,
@@ -15,7 +17,6 @@ import {
   type PublicReview,
   type PublicState,
   findSecretLike,
-  sameParams,
   secretInTextMessage,
   turnLimitOf,
 } from "./shared.js";
@@ -30,6 +31,18 @@ const MIN_QUOTE = 4;
 // 相手からの歩み寄り (initiative): 条件がそろったとき、キャラクターの側から「私はこうしたい」と着地点を示す。
 // プレイヤーの積み重ねが根拠になっていることを、エンジンが確かめられる範囲で確かめる。
 // 条件 (信頼度・根拠のターン数・間隔) は難易度のパラメータで決まる。
+// しゃべりすぎを防ぐ。台詞の長さと数に上限が無いと、軽いモデルほど、聞かれていない事情や本音まで続けて話してしまう
+/** 1 回の返答でしゃべるキャラクターの数 (話しかけられた人と、割り込む 1 人まで) */
+const MAX_SPEAKERS = 2;
+/** 1 回の返答の台詞の数 (地の文を除く) */
+const MAX_CHARACTER_LINES = 3;
+/** 1 つの台詞の長さ (空白を除いた文字数。短い話し言葉の 2〜3 文に収まる) */
+const MAX_LINE_CHARS = 120;
+/** 1 回の返答の台詞の長さの合計 */
+const MAX_REPLY_CHARS = 240;
+/** 地の文 (場面転換や時間の経過だけに使う) */
+const MAX_NARRATOR_LINES = 1;
+const MAX_NARRATOR_CHARS = 80;
 /** 1 回の返答で新しく見つかる本音の数 (軽いモデルほど、一般的な質問で本音を次々に出してしまうため) */
 const MAX_REVEALS_PER_REPLY = 1;
 
@@ -37,7 +50,7 @@ const MAX_REVEALS_PER_REPLY = 1;
  * 台詞に、ツール引数の JSON の切れ端が混ざっていないか。軽いモデルが引数の組み立てに失敗すると、
  * 「…なんです。」}],moods:[{character: のように、後ろの項目が台詞に流れ込むことがある
  */
-const ARGUMENT_DEBRIS = /[{}[\]]\s*,?\s*"?[A-Za-z_]+"?\s*:|"?\b(?:speaker|text|moods|character|emoji|label|concern_updates|trust_delta|trust_reason|epilogue|note|quote|evidence|initiative)\b"?\s*:/;
+const ARGUMENT_DEBRIS = /[{}[\]]\s*,?\s*"?[A-Za-z_]+"?\s*:|"?\b(?:speaker|text|moods|character|emoji|label|concern_updates|trust_changes|delta|reason|epilogue|note|asked|quote|evidence|initiative)\b"?\s*:/;
 /** 台詞全体を囲むかぎ括弧は外す (吹き出しで話者が分かるので不要) */
 const unwrapQuotes = (t: string) => (/^「[^「」]*」$/.test(t) ? t.slice(1, -1) : t);
 
@@ -94,9 +107,8 @@ export type Work =
       to: string | null;
       text: string;
       note: string;
-      /** 難易度と、それに応じた相手の物わかりの良さ (提案の受け取り方・解消の判定・歩み寄りの早さ) */
+      /** 難易度の名前。相手の物わかりの良さ (提案の受け取り方・解消の判定) は、キャラクターごとに digest.characters にある */
       difficulty: string;
-      understanding: string;
       digest: Digest;
       /** 口調の手本。毎ターン渡して、日本語と口調がぶれないようにする */
       voices: Array<{ id: string; name: string; speech: string; sample_lines: string[] }>;
@@ -112,6 +124,7 @@ export type Work =
         owner: string;
         category: string;
         text: string;
+        importance: number;
         status: ConcernStatus;
         reveal_hint: string;
         resolved_when: string;
@@ -121,11 +134,25 @@ export type Work =
         proposed_by?: "player" | "character";
         agreement?: string;
       }>;
-      trust_history: Array<{ turn: number; from: number; to: number; reason: string }>;
+      /** 登場人物ごとの信頼度 (最初と最後) と物わかり */
+      characters: Array<{ id: string; name: string; trust_start: number; trust_end: number; understanding: number }>;
+      trust_history: TrustChange[];
     };
 
+interface TrustChange {
+  turn: number;
+  character: string;
+  from: number;
+  to: number;
+  reason: string;
+}
+
 export interface Digest {
-  trust: number;
+  /**
+   * 登場人物ごとの、いまの信頼度 (1〜10) と物わかり (1〜10)。本音を話すか・歩み寄るかは、その本音を持つ人 (owner) の信頼度で決まる。
+   * 提案をどこまで汲み取るか・解消の判定の厳しさは、owner の物わかりに合わせる
+   */
+  characters: Array<{ id: string; trust: number; trust_level: string; understanding: number; understanding_note: string }>;
   /** 相手からの歩み寄りを、直近の発言で続けて使っていないか */
   initiative_cooldown_ok: boolean;
   /** 歩み寄りの根拠に要る、本音が見えた後の別々のターンの数 (evidence の引用もこの数以上) */
@@ -134,10 +161,12 @@ export interface Digest {
     id: string;
     owner: string;
     status: ConcernStatus;
+    /** owner にとっての重要度 (1〜10)。高いほど、解消の判定を厳しくする。9〜10 が残ったまま終わると持ち帰り */
+    importance: number;
     min_trust: number;
     /** revealed のとき: 本音が見えたターン。歩み寄りの根拠にできるのは、これより後のプレイヤーの発言 */
     since_turn?: number;
-    /** 歩み寄るのに要る信頼度 */
+    /** 歩み寄るのに要る、owner の信頼度 */
     initiative_trust: number;
   }>;
 }
@@ -160,8 +189,9 @@ export class Engine {
   private turnLimit = turnLimitOf(DIFFICULTY_PRESETS.normal);
   private scenario: Scenario | null = null;
   private turn = 0;
-  private trust = 0;
-  private trustHistory: Array<{ turn: number; from: number; to: number; reason: string }> = [];
+  /** キャラクターごとの信頼度 (1〜10)。プレイヤーには見せない */
+  private trust = new Map<string, number>();
+  private trustHistory: TrustChange[] = [];
   private concerns: ConcernRuntime[] = [];
   private concernSeq = 0;
   /** プレイヤーの発言とそのターン (歩み寄りの根拠の照合用。ブラウザには送らない) */
@@ -202,8 +232,8 @@ export class Engine {
   }
 
   // ---- ゲームの開始・リセット ---------------------------------------------
-  /** 「新しいシナリオを作って」。AI の wait_for_player_turn に new_game が届く。params を省くと、その難易度の初期値 */
-  requestNewGame(request: string, difficulty: Difficulty = "normal", params: DifficultyParams = DIFFICULTY_PRESETS[difficulty]) {
+  /** 「新しいシナリオを作って」。AI の wait_for_player_turn に new_game が届く。params を省くと、その難易度の初期値 (ランダムなら、ここで決める) */
+  requestNewGame(request: string, difficulty: Difficulty = "normal", params: DifficultyParams = defaultParams(difficulty)) {
     this.resetRuntime();
     this.scenario = null;
     this.phase = "setup";
@@ -225,7 +255,7 @@ export class Engine {
   private resetRuntime() {
     this.epoch++;
     this.turn = 0;
-    this.trust = 0;
+    this.trust = new Map();
     this.trustHistory = [];
     this.concerns = [];
     this.concernSeq = 0;
@@ -244,10 +274,12 @@ export class Engine {
   private begin() {
     const s = this.scenario!;
     this.resetRuntime();
-    this.trust = this.params.trustStart;
     this.turnLimit = turnLimitOf(this.params);
     this.concerns = s.concerns.map(() => ({ status: "hidden" as const }));
-    s.characters.forEach((c) => this.moods.set(c.id, { ...NEUTRAL_MOOD }));
+    for (const c of s.characters) {
+      this.trust.set(c.id, c.trust_start);
+      this.moods.set(c.id, { ...NEUTRAL_MOOD });
+    }
     for (const m of s.opening_moods ?? []) this.moods.set(m.character, { emoji: m.emoji, label: m.label });
     for (const o of s.opening) {
       const who = s.characters.find((c) => c.id === o.speaker);
@@ -316,17 +348,45 @@ export class Engine {
       const key = `${l.speaker}\u0000${squash(l.text)}`;
       if (seenLines.has(key)) errors.push(`lines[${i}] は、同じ返答の中の別の台詞とまったく同じです。同じ台詞を繰り返さないでください`);
       seenLines.add(key);
+      const len = squash(l.text).length;
+      if (l.speaker === "narrator" && len > MAX_NARRATOR_CHARS) errors.push(`lines[${i}] の地の文が長すぎます (${len} 文字 > ${MAX_NARRATOR_CHARS})。場面転換や時間の経過を 1 文で`);
+      if (l.speaker !== "narrator" && len > MAX_LINE_CHARS) errors.push(`lines[${i}] の台詞が長すぎます (${len} 文字 > ${MAX_LINE_CHARS})。聞かれたことにだけ、短く 1〜2 文で答えてください`);
     });
+    // しゃべりすぎ: 聞かれていない事情まで話し出さないよう、1 回の返答の量に上限を設ける
+    const spoken = r.lines.filter((l) => l.speaker !== "narrator");
+    const speakers = new Set(spoken.map((l) => l.speaker));
+    const total = spoken.reduce((n, l) => n + squash(l.text).length, 0);
+    if (speakers.size > MAX_SPEAKERS) errors.push(`1 回の返答でしゃべるのは ${MAX_SPEAKERS} 人までです (今回 ${speakers.size} 人)。話しかけられた人が答え、ほかの人は割り込む必要があるときに 1 人だけ`);
+    if (spoken.length > MAX_CHARACTER_LINES) errors.push(`台詞は 1 回の返答で ${MAX_CHARACTER_LINES} つまでです (今回 ${spoken.length} つ)`);
+    if (total > MAX_REPLY_CHARS) errors.push(`返答の台詞が長すぎます (合計 ${total} 文字 > ${MAX_REPLY_CHARS})。プレイヤーが聞いたことにだけ答え、聞かれていない事情や背景は話さないでください`);
+    if (r.lines.length - spoken.length > MAX_NARRATOR_LINES) errors.push(`地の文 (narrator) は 1 回の返答で ${MAX_NARRATOR_LINES} つまでです`);
     for (const m of r.moods ?? []) {
       if (!charIds.has(m.character)) errors.push(`moods: キャラクター "${m.character}" は存在しません`);
       const hit = findSteering(m.label);
       if (hit) errors.push(steeringMessage(`moods (${m.character}) の label`, hit));
     }
 
-    // 信頼度は先に適用し、その値で本音の解禁を判定する
-    const trustAfter = clamp(this.trust + (r.trust_delta ?? 0), 0, MAX_TRUST);
-    // 信頼度は画面に出ないので、動いたターンは気分の更新が唯一の手がかりになる
-    if (trustAfter !== this.trust && !r.moods?.length) errors.push("信頼度が動くターンは moods も更新してください (プレイヤーに見える唯一の手がかりです。口調の変化も lines に込めてください)");
+    // 信頼度 (キャラクターごと) は先に適用し、その値で本音の解禁を判定する
+    const trustAfter = new Map(this.trust);
+    const trustSeen = new Set<string>();
+    for (const t of r.trust_changes ?? []) {
+      const now = this.trust.get(t.character);
+      if (now === undefined) {
+        errors.push(`trust_changes: キャラクター "${t.character}" は存在しません`);
+        continue;
+      }
+      if (trustSeen.has(t.character)) {
+        errors.push(`trust_changes: "${t.character}" が重複しています (1 人 1 つまで)`);
+        continue;
+      }
+      trustSeen.add(t.character);
+      trustAfter.set(t.character, clamp(now + t.delta, MIN_LEVEL, MAX_LEVEL));
+    }
+    // 信頼度は画面に出ないので、動いた人の気分の更新が唯一の手がかりになる
+    const moodOf = new Set((r.moods ?? []).map((m) => m.character));
+    for (const [id, v] of trustAfter) {
+      if (v !== this.trust.get(id) && !moodOf.has(id)) errors.push(`"${id}" の信頼度が動くターンは、その人の moods も更新してください (プレイヤーに見える唯一の手がかりです。口調の変化も lines に込めてください)`);
+    }
 
     const planned: Array<{ index: number; from: ConcernStatus; to: ConcernStatus; note: string; by: "player" | "character" }> = [];
     const seen = new Set<string>();
@@ -353,9 +413,23 @@ export class Engine {
         errors.push(`懸念 "${u.id}" は ${from} から ${u.to} へ進められません (進めるのは ${STEPS[from].join(" / ") || "なし"})`);
         continue;
       }
-      if (from === "hidden" && trustAfter < c.min_trust) {
-        errors.push(`懸念 "${u.id}" は、まだ本音を話せるほど信頼されていません (信頼度 ${trustAfter} < 必要 ${c.min_trust})。本音は出さず、信頼度が上がる聞き方を待ってください`);
+      // 本音を話すか・歩み寄るかは、その本音を持つ人の信頼度で決まる
+      const ownerTrust = trustAfter.get(c.owner) ?? MIN_LEVEL;
+      if (from === "hidden" && ownerTrust < c.min_trust) {
+        errors.push(`懸念 "${u.id}" は、まだ ${c.owner} が本音を話せるほど信頼されていません (${c.owner} の信頼度 ${ownerTrust} < 必要 ${c.min_trust})。本音は出さず、信頼度が上がる聞き方を待ってください`);
         continue;
+      }
+      // 本音を話すのは、プレイヤーがその話題に触れたときだけ。きっかけになった発言を引用させる (聞かれていない本音を自分から話させない)
+      if (from === "hidden" && u.to === "revealed") {
+        const asked = squash(u.asked ?? "");
+        if (asked.length < MIN_QUOTE) {
+          errors.push(`懸念 "${u.id}" を revealed にするには asked が必要です。プレイヤーの今回の発言から、この本音を話すきっかけになった部分 (その話題に触れた質問など) を一字一句そのまま ${MIN_QUOTE} 文字以上引用してください。きっかけが無ければ、本音は話さず、聞かれたことにだけ答えてください`);
+          continue;
+        }
+        if (!squash(action.text).includes(asked)) {
+          errors.push(`懸念 "${u.id}" の asked がプレイヤーの今回の発言に見つかりません。言い換えず、発言の該当部分をそのまま引用してください。プレイヤーがその話題に触れていないなら、本音は話さないでください`);
+          continue;
+        }
       }
       let by: "player" | "character" = "player";
       if (u.to === "proposed") {
@@ -365,7 +439,7 @@ export class Engine {
         }
         if (u.initiative) {
           // 相手からの歩み寄り: プレイヤーの積み重ねが根拠でなければならない
-          const why = this.initiativeError(u.id, u.evidence ?? [], from, trustAfter, initiatives > 0);
+          const why = this.initiativeError(u.id, u.evidence ?? [], from, ownerTrust, initiatives > 0);
           if (why) {
             errors.push(why);
             continue;
@@ -434,10 +508,12 @@ export class Engine {
     }
     for (const m of r.moods ?? []) this.moods.set(m.character, { emoji: m.emoji, label: m.label });
 
-    if (trustAfter !== this.trust) {
+    for (const [id, to] of trustAfter) {
+      const from = this.trust.get(id)!;
+      if (to === from) continue;
       // プレイヤーには見せない。AI が get_state で振り返れるように記録だけしておく
-      this.trustHistory.push({ turn: this.turn, from: this.trust, to: trustAfter, reason: r.trust_reason ?? "" });
-      this.trust = trustAfter;
+      this.trustHistory.push({ turn: this.turn, character: id, from, to, reason: r.trust_changes?.find((t) => t.character === id)?.reason ?? "" });
+      this.trust.set(id, to);
     }
 
     // 進行の要約はチャットには出さない (現実の対話では見えないため)。懸念ボードの状態だけが変わる
@@ -468,7 +544,7 @@ export class Engine {
       ok: true,
       summary: reason
         ? `対話が終了しました (${this.ending!.type}, 解消 ${resolved}/${this.concerns.length})。続けて振り返りの依頼 (type=review) が届きます`
-        : `ok。残りターン ${this.turnLimit - this.turn}、信頼度 ${this.trust}、解消 ${resolved}/${this.concerns.length}`,
+        : `ok。残りターン ${this.turnLimit - this.turn}、信頼度 ${[...this.trust].map(([id, v]) => `${id} ${v}`).join(" / ")}、解消 ${resolved}/${this.concerns.length}`,
     };
   }
 
@@ -477,7 +553,7 @@ export class Engine {
    * 確かめられるのは「本音が見えていて案が無い」「信頼度」「プレイヤーの発言が根拠として実在し、
    * 本音が見えた後の別々のターン (数は難易度で決まる) にある」「ペース」まで。その発言が解消条件を本当に満たすかは AI の判断。
    */
-  private initiativeError(id: string, evidence: string[], from: ConcernStatus, trustAfter: number, alreadyThisReply: boolean): string | null {
+  private initiativeError(id: string, evidence: string[], from: ConcernStatus, ownerTrust: number, alreadyThisReply: boolean): string | null {
     const s = this.scenario!;
     const index = s.concerns.findIndex((c) => c.id === id);
     const c = s.concerns[index];
@@ -486,7 +562,7 @@ export class Engine {
     if (from !== "revealed") return `${head}: 使えるのは、本音が見えていて案がまだ出ていない懸念 (revealed) だけです (現在 ${from})`;
     const { initiativeCooldown: cooldown, initiativeTurns: minTurns } = this.params;
     const needTrust = this.initiativeTrust(c.min_trust);
-    if (trustAfter < needTrust) return `${head}: まだ相手から歩み寄るほどの信頼関係がありません (信頼度 ${trustAfter} < 必要 ${needTrust})。プレイヤーの発言に応じて会話を続けてください`;
+    if (ownerTrust < needTrust) return `${head}: まだ ${c.owner} から歩み寄るほどの信頼関係がありません (${c.owner} の信頼度 ${ownerTrust} < 必要 ${needTrust})。プレイヤーの発言に応じて会話を続けてください`;
     if (alreadyThisReply) return `${head}: 歩み寄りは 1 回の返答で 1 つの懸念までです`;
     if (!this.initiativeCooldownOk()) return `${head}: 直前のターンで歩み寄ったばかりです。${cooldown} ターンに 1 回までです`;
     const since = rt.sinceTurn ?? 0;
@@ -515,11 +591,22 @@ export class Engine {
     return this.lastInitiativeTurn === null || this.turn - this.lastInitiativeTurn >= this.params.initiativeCooldown;
   }
 
+  /**
+   * 結末: すべて解消なら完全合意。妥協案で合意できるのは、譲れない本音がすべて解消し、
+   * 解消した本音の重要度の合計が全体の半分以上のとき。それ以外は持ち帰り
+   */
   private finish(reason: EndReason, epilogue: string) {
+    const s = this.scenario!;
+    const done = (i: number) => this.concerns[i].status === "resolved";
     const total = this.concerns.length;
     const resolved = this.concerns.filter((c) => c.status === "resolved").length;
-    const type = resolved === total ? "full_agreement" : resolved * 2 >= total ? "compromise" : "carry_over";
-    this.ending = { type, reason, epilogue, resolved, total };
+    const importance = {
+      resolved: s.concerns.reduce((n, c, i) => n + (done(i) ? c.importance : 0), 0),
+      total: s.concerns.reduce((n, c) => n + c.importance, 0),
+    };
+    const nonNegotiableLeft = s.concerns.filter((c, i) => c.importance >= NON_NEGOTIABLE && !done(i)).length;
+    const type = resolved === total ? "full_agreement" : nonNegotiableLeft === 0 && importance.resolved * 2 >= importance.total ? "compromise" : "carry_over";
+    this.ending = { type, reason, epilogue, resolved, total, importance, nonNegotiableLeft };
     this.phase = "ended";
     this.current = null;
     this.addLog({ from: "narrator", text: epilogue });
@@ -557,7 +644,10 @@ export class Engine {
   private digest(): Digest {
     const s = this.scenario!;
     return {
-      trust: this.trust,
+      characters: s.characters.map((c) => {
+        const trust = this.trust.get(c.id)!;
+        return { id: c.id, trust, trust_level: trustName(trust), understanding: c.understanding, understanding_note: understandingNote(c.understanding) };
+      }),
       initiative_cooldown_ok: this.initiativeCooldownOk(),
       initiative_min_turns: this.params.initiativeTurns,
       concerns: s.concerns.map((c, i) => {
@@ -566,6 +656,7 @@ export class Engine {
           id: c.id,
           owner: c.owner,
           status: rt.status,
+          importance: c.importance,
           min_trust: c.min_trust,
           since_turn: rt.status === "revealed" ? rt.sinceTurn : undefined,
           initiative_trust: this.initiativeTrust(c.min_trust),
@@ -594,7 +685,6 @@ export class Engine {
         text: a.text,
         note: notes.join(" / "),
         difficulty: this.difficultyName,
-        understanding: UNDERSTANDING_TEXT[this.params.understanding],
         digest: this.digest(),
         voices: this.scenario.characters.map((c) => ({ id: c.id, name: c.name, speech: c.speech, sample_lines: c.sample_lines })),
       };
@@ -610,13 +700,14 @@ export class Engine {
         type: "review",
         difficulty: this.difficultyName,
         ending: this.ending,
-        note: "対話が終わりました。プレイヤーへの振り返りを submit_review で書いてください。transcript の実際の発言を引いて具体的に。励ましつつ、次に活かせる形で。解消できなかった懸念すべてに、どんな聞き方・どんな案なら届いたかを (reveal_hint / resolved_when を踏まえて) 書くこと。プレイヤーには信頼度の数値は見えていないので、数値ではなく相手の反応で説明する。concerns[].proposed_by が character の懸念は、プレイヤーの積み重ねで相手から歩み寄ってくれたもの。何が効いたかを具体的に褒める",
+        note: "対話が終わりました。プレイヤーへの振り返りを submit_review で書いてください。transcript の実際の発言を引いて具体的に。励ましつつ、次に活かせる形で。解消できなかった懸念すべてに、どんな聞き方・どんな案なら届いたかを (reveal_hint / resolved_when を踏まえて) 書くこと。重要度 (importance) の高い本音を優先できたかにも触れる。ending.nonNegotiableLeft が 1 以上なら、譲れない本音が残ったことが持ち帰りの理由。プレイヤーには信頼度の数値は見えていないので、数値ではなく相手の反応で説明する。concerns[].proposed_by が character の懸念は、プレイヤーの積み重ねで相手から歩み寄ってくれたもの。何が効いたかを具体的に褒める",
         transcript: this.log.map((l) => `${name(l)}: ${l.text}`),
         concerns: s.concerns.map((c, i) => ({
           id: c.id,
           owner: c.owner,
           category: c.category,
           text: c.text,
+          importance: c.importance,
           status: this.concerns[i].status,
           reveal_hint: c.reveal_hint,
           resolved_when: c.resolved_when,
@@ -625,6 +716,7 @@ export class Engine {
           proposed_by: this.concerns[i].proposedBy,
           agreement: this.concerns[i].agreement,
         })),
+        characters: s.characters.map((c) => ({ id: c.id, name: c.name, trust_start: c.trust_start, trust_end: this.trust.get(c.id)!, understanding: c.understanding })),
         trust_history: this.trustHistory,
       };
     }
@@ -659,7 +751,7 @@ export class Engine {
       params: this.params,
       turn_limit: this.turnLimit,
       turn: this.turn,
-      trust: this.trust,
+      trust: Object.fromEntries(this.trust),
       trust_history: this.trustHistory.slice(-8),
       scenario: s,
       concerns: s?.concerns.map((c, i) => ({
@@ -689,16 +781,19 @@ export class Engine {
       const found = all.filter((x) => x.rt.status !== "hidden").sort((a, b) => (a.rt.seq ?? 0) - (b.rt.seq ?? 0));
       for (const { c, rt } of found) {
         const pc: PublicConcern = { id: c.id, owner: c.owner, category: c.category, status: rt.status, text: c.text };
-        if (ended && rt.status === "resolved") pc.agreement = rt.agreement; // 合意書用。ゲーム中は送らない
+        // 重要度と合意内容は、終了後の答え合わせと合意書にだけ載せる。ゲーム中は送らない
+        if (ended) pc.importance = c.importance;
+        if (ended && rt.status === "resolved") pc.agreement = rt.agreement;
         concerns.push(pc);
       }
-      if (ended) for (const { c, rt } of all) if (rt.status === "hidden") concerns.push({ id: c.id, owner: c.owner, category: c.category, status: "hidden", text: c.text, missed: true });
+      if (ended) for (const { c, rt } of all) if (rt.status === "hidden") concerns.push({ id: c.id, owner: c.owner, category: c.category, status: "hidden", text: c.text, importance: c.importance, missed: true });
     }
     return {
       epoch: this.epoch,
       phase: this.phase,
       difficulty: this.difficulty,
-      customized: !sameParams(this.params, DIFFICULTY_PRESETS[this.difficulty]),
+      customized: isCustomized(this.difficulty, this.params),
+      params: ended ? { ...this.params } : null,
       generating: this.generating,
       scenario: s && {
         title: s.title,

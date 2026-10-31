@@ -4,10 +4,14 @@ import {
   DIFFICULTIES,
   DIFFICULTY_INFO,
   DIFFICULTY_PRESETS,
+  IMPORTANCE_LEVEL_NAMES,
+  levelBand,
+  NON_NEGOTIABLE,
   PARAM_SPECS,
   sameParams,
+  TRUST_LEVEL_NAMES,
   turnLimitOf,
-  UNDERSTANDING_LABELS,
+  UNDERSTANDING_LEVEL_NAMES,
   ENDING_LABELS,
   STATUS_LABELS,
   type AiProviderOption,
@@ -156,17 +160,31 @@ function renderSide(s: PublicState) {
   $("board").replaceChildren(...(s.concerns.length ? s.concerns.map((c) => concernCard(s, c)) : [h("div", { class: "empty" }, "まだ何も見えていません。相手の話を聞いてみましょう。")]));
 }
 
-/** ボードのカードは本音の内容と状態だけ。合意内容と助言は、終了後の画面 (withAgreement / advice) にだけ出す */
+/** ボードのカードは本音の内容と状態だけ。重要度・合意内容・助言は、終了後の画面にだけ出す (重要度と合意内容は、終了後にしか届かない) */
 function concernCard(s: PublicState, c: PublicConcern, withAgreement = false, advice?: string) {
   const owner = charOf(s, c.owner);
   return h(
     "div",
     { class: `concern ${c.status}${c.missed ? " missed" : ""}` },
-    h("div", { class: "top" }, h("span", {}, owner?.emoji ?? ""), h("span", { class: "cat" }, c.category), h("span", { class: "st" }, c.missed ? "見つけられなかった" : STATUS_LABELS[c.status])),
+    h(
+      "div",
+      { class: "top" },
+      h("span", {}, owner?.emoji ?? ""),
+      h("span", { class: "cat" }, c.category),
+      c.importance !== undefined && importanceBadge(c.importance),
+      h("span", { class: "st" }, c.missed ? "見つけられなかった" : STATUS_LABELS[c.status]),
+    ),
     h("div", {}, c.text),
     withAgreement && c.agreement && h("div", { class: "sub" }, `✅ ${c.agreement}`),
     advice && h("div", { class: "sub advice" }, `💡 ${advice}`),
   );
+}
+
+/** 本音の重要度 (例: 重要度 9 · 譲れない)。終了後の答え合わせ用。必ず達成したい・譲れないものは目立たせる */
+function importanceBadge(v: number) {
+  const band = levelBand(v);
+  const tone = v >= NON_NEGOTIABLE ? " must" : band === 3 ? " high" : "";
+  return h("span", { class: `imp${tone}`, title: "その人にとっての重要度 (1〜10)" }, `重要度 ${v} · ${IMPORTANCE_LEVEL_NAMES[band]}`);
 }
 
 // ---- 入力欄 -------------------------------------------------------------------------
@@ -506,7 +524,8 @@ function storyDialog(s: PublicState) {
   showTuned();
   const start = () => {
     chosenDifficulty = level.value();
-    post("new", { request: area.value, difficulty: chosenDifficulty, params: tunedParams ?? undefined }).then((ok) => ok && ((composeNew = false), render()));
+    const params = chosenDifficulty === "random" ? undefined : (tunedParams ?? undefined); // ランダムは、始めるときに決まる
+    post("new", { request: area.value, difficulty: chosenDifficulty, params }).then((ok) => ok && ((composeNew = false), render()));
   };
   return h(
     "div",
@@ -554,10 +573,13 @@ function difficultyPicker(initial: Difficulty, onPick: (d: Difficulty) => void) 
 
 const range = (min: number, max: number) => Array.from({ length: max - min + 1 }, (_, i) => min + i);
 const PARAM_GROUPS: Array<[string, Array<keyof DifficultyParams>]> = [
-  ["シナリオ", ["concerns", "openAtStart", "turnsPerConcern"]],
-  ["相手", ["trustStart", "understanding"]],
+  ["シナリオ", ["concerns", "openAtStart", "nonNegotiable", "turnsPerConcern"]],
+  ["相手 (登場人物の平均)", ["trustStart", "understanding"]],
   ["相手からの歩み寄り", ["initiativeTurns", "initiativeTrust", "initiativeCooldown"]],
 ];
+/** 1〜10 の段階で表すパラメータは、選択肢に呼び名を添える (例: 5 (様子見)) */
+const LEVEL_NAMES: Partial<Record<keyof DifficultyParams, readonly string[]>> = { trustStart: TRUST_LEVEL_NAMES, understanding: UNDERSTANDING_LEVEL_NAMES, initiativeTrust: TRUST_LEVEL_NAMES };
+const paramText = (key: keyof DifficultyParams, v: number) => (LEVEL_NAMES[key] ? `${v} (${LEVEL_NAMES[key][levelBand(v)]})` : String(v));
 
 /**
  * 「パラメータ」の折りたたみ欄 (▶ を押すとその場で開く): 難易度の中身を見て、微調整する。
@@ -569,7 +591,10 @@ function paramsPanel(level: () => Difficulty, onChange: () => void) {
   const el = h("details", { class: "params" }, h("summary", {}, "パラメータ (難易度の中身を見る・微調整する)"), body);
   el.open = paramsOpen;
   el.addEventListener("toggle", () => (paramsOpen = el.open));
-  let preset = DIFFICULTY_PRESETS[level()];
+  // ランダムでは、パラメータは始めるときに決まり、調整もできない (何が選ばれたかは終了後に見られる)。欄ごと隠す
+  const presetOf = (d: Difficulty) => DIFFICULTY_PRESETS[d === "random" ? "normal" : d];
+  let preset = presetOf(level());
+  el.hidden = level() === "random";
   let p: DifficultyParams = { ...(tunedParams ?? preset) };
   const update = (next: DifficultyParams, focusKey?: string) => {
     p = { ...next, openAtStart: Math.min(next.openAtStart, next.concerns) };
@@ -579,16 +604,13 @@ function paramsPanel(level: () => Difficulty, onChange: () => void) {
     if (focusKey) body.querySelector<HTMLSelectElement>(`select[data-key="${focusKey}"]`)?.focus();
   };
   const row = (key: keyof DifficultyParams) => {
-    const numeric = key !== "understanding";
-    const spec = numeric ? PARAM_SPECS[key] : { label: "物わかり", help: "提案をどこまで汲み取るか、解消の判定をどこまで厳しくするか" };
-    const options = numeric
-      ? range(PARAM_SPECS[key].min, key === "openAtStart" ? p.concerns : PARAM_SPECS[key].max).map((v) => [String(v), String(v)])
-      : Object.entries(UNDERSTANDING_LABELS);
-    const select = h("select", { "data-key": key, "aria-label": spec.label }, ...options.map(([v, text]) => h("option", { value: v }, text)));
+    const spec = PARAM_SPECS[key];
+    const options = range(spec.min, key === "openAtStart" ? p.concerns : spec.max);
+    const select = h("select", { "data-key": key, "aria-label": spec.label }, ...options.map((v) => h("option", { value: String(v) }, paramText(key, v))));
     select.value = String(p[key]);
-    select.addEventListener("change", () => update({ ...p, [key]: numeric ? Number(select.value) : select.value }, key));
+    select.addEventListener("change", () => update({ ...p, [key]: Number(select.value) }, key));
     const changed = p[key] !== preset[key];
-    const initial = numeric ? String(preset[key]) : UNDERSTANDING_LABELS[preset.understanding];
+    const initial = paramText(key, preset[key]);
     const extra = key === "turnsPerConcern" ? ` → いまは ${turnLimitOf(p)} ターン` : "";
     return h("div", { class: `prow${changed ? " changed" : ""}` }, h("span", { class: "plabel" }, spec.label), select, h("small", {}, `${spec.help}${extra}${changed ? ` (初期値 ${initial})` : ""}`));
   };
@@ -603,20 +625,39 @@ function paramsPanel(level: () => Difficulty, onChange: () => void) {
   return {
     el,
     refresh() {
-      preset = DIFFICULTY_PRESETS[level()];
+      preset = presetOf(level());
+      el.hidden = level() === "random";
       p = { ...(tunedParams ?? preset) };
       draw();
     },
   };
 }
 
+/** ランダムで選ばれたパラメータ (終了後の答え合わせ)。開くと一覧が出る */
+function randomParamsBlock(p: DifficultyParams) {
+  return h(
+    "details",
+    { class: "params" },
+    h("summary", {}, "今回のパラメータ (ランダムで選ばれた値)"),
+    h(
+      "div",
+      { class: "pbody" },
+      ...PARAM_GROUPS.map(([title, keys]) =>
+        h("div", { class: "pgroup" }, h("h3", {}, title), ...keys.map((k) => h("div", { class: "prow" }, h("span", { class: "plabel" }, PARAM_SPECS[k].label), h("span", {}, paramText(k, p[k]))))),
+      ),
+      h("p", { class: "muted text-sm" }, `ターン数の上限: ${turnLimitOf(p)} ターン`),
+    ),
+  );
+}
+
 function agreementMarkdown(s: PublicState) {
   const e = s.ending!;
-  const lines = [`# 合意書: ${s.scenario?.title ?? ""}`, "", `結果: ${ENDING_LABELS[e.type].icon} ${ENDING_LABELS[e.type].title} (解消 ${e.resolved}/${e.total})`, "", e.epilogue, "", "## 合意事項"];
+  const lines = [`# 合意書: ${s.scenario?.title ?? ""}`, "", `結果: ${ENDING_LABELS[e.type].icon} ${ENDING_LABELS[e.type].title} (解消 ${e.resolved}/${e.total}、重要度 ${e.importance.resolved}/${e.importance.total})`, "", e.epilogue, "", "## 合意事項"];
+  const tag = (c: PublicConcern) => `[${c.category}${c.importance === undefined ? "" : `・重要度 ${c.importance} ${IMPORTANCE_LEVEL_NAMES[levelBand(c.importance)]}`}]`;
   const done = s.concerns.filter((c) => c.status === "resolved");
-  lines.push(...(done.length ? done.map((c) => `- [${c.category}] ${c.text} → ${c.agreement}`) : ["- (なし)"]));
+  lines.push(...(done.length ? done.map((c) => `- ${tag(c)} ${c.text} → ${c.agreement}`) : ["- (なし)"]));
   const rest = s.concerns.filter((c) => c.status !== "resolved");
-  if (rest.length) lines.push("", "## 持ち越し", ...rest.map((c) => `- [${c.category}] ${c.text}${c.missed ? " (本音を聞き出せなかった)" : ""}`));
+  if (rest.length) lines.push("", "## 持ち越し", ...rest.map((c) => `- ${tag(c)} ${c.text}${c.missed ? " (本音を聞き出せなかった)" : ""}`));
   return lines.join("\n");
 }
 
@@ -677,7 +718,9 @@ function renderEnding(s: PublicState) {
         { class: "dialog" },
         h("div", { class: "big" }, label.icon),
         h("h2", { class: "center" }, `${label.title} (${cur.ending.resolved}/${cur.ending.total})`),
-        h("p", { class: "muted center text-sm" }, `難易度: ${DIFFICULTY_INFO[cur.difficulty]?.label ?? "普通"}${cur.customized ? " (調整あり)" : ""}`),
+        h("p", { class: "muted center text-sm" }, `解消した本音の重要度: ${cur.ending.importance.resolved} / ${cur.ending.importance.total}　難易度: ${DIFFICULTY_INFO[cur.difficulty]?.label ?? "普通"}${cur.customized ? " (調整あり)" : ""}`),
+        cur.ending.nonNegotiableLeft > 0 && h("p", { class: "center warn" }, `譲れない本音が ${cur.ending.nonNegotiableLeft} つ残ったため、合意には至りませんでした。`),
+        cur.difficulty === "random" && cur.params && randomParamsBlock(cur.params),
         h("p", { class: "muted center" }, cur.ending.epilogue),
         reviewBlock(cur),
         h("div", {}, sectionTitle("合意事項"), ...(done.length ? done.map((c) => concernCard(cur, c, true)) : [h("p", { class: "muted" }, "なし")])),
