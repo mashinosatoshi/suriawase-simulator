@@ -2,7 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { parseDifficulty, randomParams } from "./difficulty.js";
 import { Engine, stripSelfIntro, type Work } from "./engine.js";
-import { leaksSecret, replySchema, type ReplyInput } from "./scenario.js";
+import { leaksSecret, replySchema, type ReplyInput, type Scenario } from "./scenario.js";
+import { discoverRate, resolveRate, scoreGame } from "./score.js";
 import { DIFFICULTY_PRESETS, PARAM_SPECS, type DifficultyParams, type PresetDifficulty } from "./shared.js";
 
 const scenario = () => ({
@@ -1092,6 +1093,57 @@ test("本音の重要度: ゲーム中は画面に送らない (終了後の答�
   assert.match(withImportance([9, 7, 4, 6, 11]), /concerns\.4\.importance/);
   assert.equal(g.phase, "setup");
   assert.equal(withImportance([10, 1, 3, 8, 5]), "");
+});
+
+// ---- スコア ---------------------------------------------------------------------------------
+// 普通のシナリオ: 村長 (信頼度 6・物わかり 6)、渡し守 (信頼度 4・物わかり 4)。
+// 本音ごとの最高点 (引き出し + 解決): c1 18+72=90 / c2 21+67=88 / c3 8+32=40 / c4 15+48=63 / c5 15+48=63 (合計 344)。
+// 完全合意ボーナスは 2 割 (69) で、満点は 413
+
+test("スコアの難しさ: 打ち解けるまで話さない本音ほど引き出しが、物わかりが悪く信頼されていない相手ほど解決が難しい", () => {
+  assert.equal(discoverRate(1, 6), 100); // 最初から話せる
+  assert.equal(discoverRate(6, 4), 150); // 信頼度を 2 上げないと話さない
+  assert.equal(discoverRate(9, 1), 300);
+  assert.equal(resolveRate(10, 10), 100);
+  assert.equal(resolveRate(6, 6), 160);
+  assert.equal(resolveRate(1, 1), 235);
+});
+
+test("スコア: 重要な本音を手ごわい相手から引き出し、解決するほど高い / ランクは満点に対する割合", () => {
+  // 妥協案 (c1・c2 を解決、ほかは見つけられなかった): 90 + 88 = 178 点 (43%)
+  const two = endAfterResolving(["c1", "c2"]).score;
+  assert.deepEqual([two.total, two.max, two.percent, two.rank, two.bonus], [178, 413, 43, "C", 0]);
+  const c2 = two.items.find((x) => x.id === "c2")!;
+  assert.deepEqual([c2.discovered, c2.resolved, c2.discoverRate, c2.resolveRate, c2.discoverPoints, c2.resolvePoints], [true, true, 150, 190, 21, 67]);
+  assert.deepEqual(two.items.find((x) => x.id === "c3"), { id: "c3", importance: 4, discovered: false, resolved: false, discoverRate: 100, resolveRate: 160, discoverPoints: 0, resolvePoints: 0, maxPoints: 40 });
+  // 完全合意: すべての点 + ボーナス 2 割で満点
+  const e = nearlyAgreed();
+  must(e.reply({ turn: 6, lines: [line()], epilogue: "橋は無事にかかった。", concern_updates: resolveLast }));
+  const full = e.publicState().ending!.score;
+  assert.deepEqual([full.total, full.bonus, full.percent, full.rank], [413, 69, 100, "S"]);
+  // 引き出しただけ (c1 を見つけて持ち帰り): 引き出し点 18 だけ
+  const one = endedWithOneFound().publicState().ending!.score;
+  assert.deepEqual([one.total, one.rank], [18, "D"]);
+  assert.deepEqual(one.items.find((x) => x.id === "c1"), { id: "c1", importance: 9, discovered: true, resolved: false, discoverRate: 100, resolveRate: 160, discoverPoints: 18, resolvePoints: 0, maxPoints: 90 });
+});
+
+test("スコア: 同じ結果でも、相手が手ごわいほど点が高い / 振り返りを書く AI にも渡る", () => {
+  const statuses = ["resolved", "resolved", "hidden", "hidden", "hidden"] as const;
+  const base = scoreGame(scenario() as Scenario, [...statuses]);
+  // 渡し守がもっと頑固 (物わかり 4 → 2) で、渡し賃の本音も打ち解けにくい (min_trust 6 → 8) とき
+  const tough = scenario();
+  tough.characters[1].understanding = 2;
+  tough.concerns[1].min_trust = 8;
+  const hard = scoreGame(tough as Scenario, [...statuses]);
+  const c2 = (g: typeof base) => g.items.find((x) => x.id === "c2")!;
+  assert.deepEqual([c2(base).discoverPoints, c2(base).resolvePoints], [21, 67]);
+  assert.deepEqual([c2(hard).discoverPoints, c2(hard).resolvePoints], [28, 74]); // 7×2×200% / 7×5×210%
+  assert.ok(hard.total > base.total);
+
+  const e = endedWithOneFound();
+  const review = e.pendingWork() as Extract<Work, { type: "review" }>;
+  assert.equal(review.ending.score.total, 18);
+  assert.match(review.note, /ending\.score はエンジンが出したスコア/);
 });
 
 // ---- 難易度: ランダム ------------------------------------------------------------------------
