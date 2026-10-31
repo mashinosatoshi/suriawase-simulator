@@ -30,7 +30,10 @@ export const GAME_TOOLS: GameTool[] = [
 設計の指針:
 - 舞台は自由 (現実の仕事・家族・地域から、ファンタジー・SF まで)。プレイヤーの request があれば従う。
 - 課題は「どちらかが勝つ」ものではなく、双方の事情を理解して落としどころを見つけるもの。
-- 難易度 (仕事の difficulty) に従う。懸念はちょうど difficulty.concerns 個。そのうち最初から話せる本音 (min_trust が difficulty.trust_start 以下) はちょうど difficulty.open_at_start 個にし、残りは trust_start より上でばらつかせる。opening の口調と opening_moods は difficulty.mood に合わせる。初期の信頼度とターン数の上限 (difficulty.turns) はエンジンが設定する。
+- 難易度 (仕事の difficulty) に従う。懸念はちょうど difficulty.concerns 個。
+- 各キャラに trust_start (最初の信頼度) と understanding (物わかり) を 1〜10 で付ける。persona (人柄) に合わせて人ごとに差をつけ、全員の平均を difficulty.trust_start / difficulty.understanding ±1 に収める。
+- 各懸念に importance (owner にとっての重要度 1〜10) を付ける。9〜10 (これだけは譲れない) はちょうど difficulty.non_negotiable 個。残りは 1〜8 で緩急をつける。
+- 最初から話せる本音 (min_trust が owner の trust_start 以下) はちょうど difficulty.open_at_start 個にし、残りは owner の trust_start より上でばらつかせる。opening の口調と opening_moods は、各キャラの trust_start の段階 (difficulty.trust_levels) に合わせる。ターン数の上限 (difficulty.turns) はエンジンが設定する。
 - 懸念は表向きの要望の裏にある本音で、互いに少しトレードオフになると面白い。どの本音を最初から話せるものにするかは、物語として自然なものを選ぶ (表向きの要望に近いものほど話しやすい)。
 - resolved_when は「どんな案なら解消するか」を具体的に。AI自身が後から甘くしないための固定条件になる。
 - briefing (前提情報) には、プレイヤーの立場なら当然知っている事実を 3〜8 項目、具体的に書く (何の話か・相手は誰か・期限や予算などの数字・これまでの経緯)。プレイヤーが「そもそも何の話か」を聞き直さずに議論に入れるようにする。隠された本音は書かない。
@@ -46,7 +49,7 @@ export const GAME_TOOLS: GameTool[] = [
   {
     name: "reply",
     description:
-      "プレイヤーの発言への返答。1 回で 1 ターンが完結し、手番がプレイヤーに戻る。発言・信頼度・懸念の進行・気分をまとめて渡す。ルール違反があると何も反映されずエラーが返るので、直して再度呼ぶ",
+      "プレイヤーの発言への返答。1 回で 1 ターンが完結し、手番がプレイヤーに戻る。発言・信頼度 (キャラごと)・懸念の進行・気分をまとめて渡す。ルール違反があると何も反映されずエラーが返るので、直して再度呼ぶ",
     shape: replyShape,
     run(engine, input) {
       const parsed = replySchema.safeParse(input);

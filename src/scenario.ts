@@ -1,8 +1,10 @@
 import { z } from "zod";
-import type { DifficultyBrief } from "./difficulty.js";
-import { findSecretLike, MAX_TRUST, PARAM_SPECS } from "./shared.js";
+import { AVERAGE_TOLERANCE, type DifficultyBrief } from "./difficulty.js";
+import { findSecretLike, MAX_LEVEL, MIN_LEVEL, NON_NEGOTIABLE, PARAM_SPECS } from "./shared.js";
 
 const MAX_CONCERNS = PARAM_SPECS.concerns.max;
+/** 1 ターンに動かせる信頼度 (1 人あたり) */
+export const MAX_TRUST_STEP = 2;
 
 // ---- シナリオ (AI が生成する) ---------------------------------------------
 // 「AI専用」の項目はブラウザに送られない。解消条件 (resolved_when) は開始時に確定し、以後 AI も変更できない。
@@ -19,6 +21,18 @@ export const characterSchema = z.object({
     .min(10)
     .max(400)
     .describe("【AI専用】性格・価値観・何を大事にしているか。口調は speech に書く。「黙り込む」「言い淀む」など、隠し事を匂わせる振る舞いは書かない"),
+  trust_start: z
+    .number()
+    .int()
+    .min(MIN_LEVEL)
+    .max(MAX_LEVEL - 1)
+    .describe("【AI専用】このキャラの、プレイヤーへの最初の信頼度 (1〜9。1 = 険悪 〜 10 = 信頼。difficulty.trust_levels を参照)。全員の平均を difficulty.trust_start ±1 に収め、persona に合わせて人ごとに差をつける"),
+  understanding: z
+    .number()
+    .int()
+    .min(MIN_LEVEL)
+    .max(MAX_LEVEL)
+    .describe("【AI専用】このキャラの物わかりの良さ (1 = 字面どおりにしか受け取らない 〜 10 = 言いたいことを汲み取る。difficulty.understanding_levels を参照)。全員の平均を difficulty.understanding ±1 に収め、persona と矛盾しない値にする"),
   speech: z
     .string()
     .min(10)
@@ -36,13 +50,21 @@ export const concernSchema = z.object({
   owner: id.describe("この懸念を持つキャラクターの id"),
   category: z.string().min(1).max(8).describe("懸念ボードに載るタグ。本音が見つかるまでプレイヤーには見えない (例: お金 / 時間 / 気持ち / 周囲への影響)"),
   text: z.string().min(6).max(120).describe("本当の懸念を一文で。発見されるまで非公開"),
+  importance: z
+    .number()
+    .int()
+    .min(MIN_LEVEL)
+    .max(MAX_LEVEL)
+    .describe(
+      "owner にとっての重要度 (1〜10。difficulty.importance_levels を参照)。9〜10 (これだけは譲れない) をちょうど difficulty.non_negotiable 個にし、残りは 1〜8 で緩急をつける (「必ず達成したい」から「譲ってもよい」まで)。本音が見つかるとプレイヤーにも見える",
+    ),
   reveal_hint: z.string().min(6).max(200).describe("【AI専用】どんな聞き方・話題で本音が出るか"),
   min_trust: z
     .number()
     .int()
-    .min(0)
-    .max(MAX_TRUST - 1)
-    .describe("本音を話し始める最低信頼度 (0〜4)。難易度の open_at_start 個だけを trust_start 以下 (最初から話せる) にし、残りは trust_start より上でばらつかせる"),
+    .min(MIN_LEVEL)
+    .max(MAX_LEVEL - 1)
+    .describe("この本音を話し始める、owner の信頼度 (1〜9)。difficulty.open_at_start 個だけを owner の trust_start 以下 (最初から話せる) にし、残りは owner の trust_start より上でばらつかせる"),
   resolved_when: z
     .string()
     .min(10)
@@ -199,10 +221,34 @@ export function checkScenario(s: Scenario, d: DifficultyBrief): string[] {
     if (hit) errors.push(steeringMessage(`opening_moods (${m.character}) の label`, hit));
   }
   if (s.concerns.length !== d.concerns) errors.push(`難易度「${d.label}」では、懸念はちょうど ${d.concerns} 個にしてください (いま ${s.concerns.length} 個)`);
-  const open = s.concerns.filter((c) => c.min_trust <= d.trust_start).length;
-  if (open !== d.open_at_start) {
+  // 信頼度と物わかりは登場人物ごと。平均が難易度の値に近く、2 人以上なら人柄に合わせて差がある
+  const levels: Array<[string, (c: Scenario["characters"][number]) => number, number]> = [
+    ["最初の信頼度 (trust_start)", (c) => c.trust_start, d.trust_start],
+    ["物わかり (understanding)", (c) => c.understanding, d.understanding],
+  ];
+  for (const [name, of, target] of levels) {
+    const values = s.characters.map(of);
+    const avg = values.reduce((a, b) => a + b, 0) / values.length;
+    const lo = Math.max(MIN_LEVEL, target - AVERAGE_TOLERANCE);
+    const hi = Math.min(MAX_LEVEL, target + AVERAGE_TOLERANCE);
+    if (avg < lo || avg > hi) errors.push(`難易度「${d.label}」では、登場人物の${name}の平均を ${lo}〜${hi} にしてください (いま ${values.join(", ")} で平均 ${Math.round(avg * 10) / 10})`);
+    if (values.length > 1 && new Set(values).size === 1) errors.push(`登場人物の${name}が全員 ${values[0]} です。persona (人柄) に合わせて、人ごとに差をつけてください (平均は ${lo}〜${hi})`);
+  }
+  // 要望の緩急: 譲れない本音の数は難易度で決まる。残りは同じ重要度に並べない
+  const musts = s.concerns.filter((c) => c.importance >= NON_NEGOTIABLE).map((c) => c.id);
+  if (musts.length !== d.non_negotiable) {
     errors.push(
-      `難易度「${d.label}」では、最初から話せる本音 (min_trust が初期の信頼度 ${d.trust_start} 以下) をちょうど ${d.open_at_start} 個にしてください (いま ${open} 個)。残りの min_trust は ${d.trust_start + 1}〜${MAX_TRUST - 1} にする`,
+      `難易度「${d.label}」では、これだけは譲れない本音 (importance ${NON_NEGOTIABLE}〜${MAX_LEVEL}) をちょうど ${d.non_negotiable} 個にしてください (いま ${musts.length} 個${musts.length ? `: ${musts.join(", ")}` : ""})。残りの importance は ${MIN_LEVEL}〜${NON_NEGOTIABLE - 1} にする`,
+    );
+  }
+  const rest = s.concerns.filter((c) => c.importance < NON_NEGOTIABLE).map((c) => c.importance);
+  if (rest.length > 1 && new Set(rest).size === 1) errors.push(`譲れない本音以外の重要度 (importance) が全部 ${rest[0]} です。「必ず達成したい」から「譲ってもよい」まで、本音ごとに緩急をつけてください`);
+  // 最初から話せる本音: その本音を持つ人 (owner) の最初の信頼度で決まる
+  const startOf = new Map(s.characters.map((c) => [c.id, c.trust_start]));
+  const open = s.concerns.filter((c) => startOf.has(c.owner) && c.min_trust <= startOf.get(c.owner)!).map((c) => c.id);
+  if (open.length !== d.open_at_start) {
+    errors.push(
+      `難易度「${d.label}」では、最初から話せる本音 (min_trust が owner の trust_start 以下) をちょうど ${d.open_at_start} 個にしてください (いま ${open.length} 個${open.length ? `: ${open.join(", ")}` : ""})。残りの min_trust は、owner の trust_start + 1 〜 ${MAX_LEVEL - 1} にする`,
     );
   }
   return errors;
@@ -216,9 +262,20 @@ export const replyShape = {
     .array(z.object({ speaker: z.string().describe("キャラクター id か 'narrator'"), text: z.string().min(1).max(400) }))
     .min(1)
     .max(4)
-    .describe("このターンの発言。セリフ中心、1〜3個が目安"),
-  trust_delta: z.number().int().min(-1).max(1).optional().describe("信頼度の増減。1ターンに ±1 まで。先に適用され、その後の信頼度で本音の解禁を判定する。信頼度はプレイヤーには見えないので、変化は口調や moods で表現する"),
-  trust_reason: z.string().max(80).optional().describe("信頼度を動かした理由 (プレイヤーには表示されない。get_state で振り返るための記録)"),
+    .describe("このターンの発言。聞かれたことにだけ短く答える。台詞は 3 つまで (1 つ 120 文字以内、合計 240 文字以内)、しゃべるのは 2 人まで、地の文は 1 つまで"),
+  trust_changes: z
+    .array(
+      z.object({
+        character: z.string().describe("キャラクター id"),
+        delta: z.number().int().min(-MAX_TRUST_STEP).max(MAX_TRUST_STEP).describe("信頼度の増減 (1 人 1 ターンに ±2 まで)。+1 がふつう、+2 はその人の気持ちや事情を的確に汲んだとき"),
+        reason: z.string().max(80).optional().describe("動かした理由 (プレイヤーには表示されない。get_state で振り返るための記録)"),
+      }),
+    )
+    .max(4)
+    .optional()
+    .describe(
+      "信頼度 (キャラクターごと、1〜10) の増減。動かす人だけ書く。先に適用され、その後の owner の信頼度で本音の解禁を判定する。信頼度はプレイヤーには見えないので、変化は口調と、その人の moods で表現する",
+    ),
   concern_updates: z
     .array(
       z.object({
@@ -229,6 +286,13 @@ export const replyShape = {
           .max(200)
           .optional()
           .describe("resolved=何で合意したか (終了時の合意書に載る) / proposed=出された対処案の要約 / proposed→revealed(差し戻し)=何が足りないか。後の2つは AI の記録用でプレイヤーには見えない"),
+        asked: z
+          .string()
+          .max(200)
+          .optional()
+          .describe(
+            "未発見 (hidden) から to=revealed にするとき必須。プレイヤーの今回の発言から、この本音を話すきっかけになった部分 (その話題に触れた質問など) を一字一句そのまま抜き出す。プレイヤーが触れていない本音は話さない",
+          ),
         quote: z
           .string()
           .max(200)

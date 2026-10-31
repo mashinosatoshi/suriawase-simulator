@@ -1,9 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseDifficulty } from "./difficulty.js";
+import { parseDifficulty, randomParams } from "./difficulty.js";
 import { Engine, stripSelfIntro, type Work } from "./engine.js";
-import { leaksSecret, type ReplyInput } from "./scenario.js";
-import { DIFFICULTY_PRESETS, type Difficulty } from "./shared.js";
+import { leaksSecret, replySchema, type ReplyInput } from "./scenario.js";
+import { DIFFICULTY_PRESETS, PARAM_SPECS, type DifficultyParams, type PresetDifficulty } from "./shared.js";
 
 const scenario = () => ({
   title: "橋の場所",
@@ -17,6 +17,8 @@ const scenario = () => ({
       emoji: "👴",
       role: "村長",
       persona: "慎重で面倒見がよい。決めつけられるのを嫌う。",
+      trust_start: 6,
+      understanding: 6,
       speech: "一人称は「わし」、相手は「あんた」。老人らしいくだけた口調で、語尾は「〜じゃ」「〜かのう」。",
       sample_lines: ["そうさのう、費用のことは気になるわい。", "あんたの話は、よう分かった。"],
     },
@@ -26,16 +28,18 @@ const scenario = () => ({
       emoji: "🛶",
       role: "渡し守",
       persona: "口数が少なく頑固。川と共に生きてきた。",
+      trust_start: 4,
+      understanding: 4,
       speech: "一人称は「おれ」、相手は「あんた」。ぶっきらぼうな常体で、短く言い切る。",
       sample_lines: ["川は毎日違う。", "船は四十年、おれが漕いできた。"],
     },
   ],
   concerns: [
-    { id: "c1", owner: "mayor", category: "予算", text: "村の蓄えが少なく大きな橋は作れない", reveal_hint: "費用や工期を尋ねる", min_trust: 0, resolved_when: "村の予算内に収まる規模の案が示される" },
-    { id: "c2", owner: "ferry", category: "仕事", text: "橋ができると渡し守の仕事がなくなる", reveal_hint: "渡し守の暮らしに触れる", min_trust: 3, resolved_when: "渡し守の収入や役割が守られる案が示される" },
-    { id: "c3", owner: "mayor", category: "行事", text: "祭りの行列の道筋が変わってしまう", reveal_hint: "村の行事や慣習を尋ねる", min_trust: 1, resolved_when: "祭りの行列の経路が確保される" },
-    { id: "c4", owner: "mayor", category: "安全", text: "子どもが橋から川へ落ちないか心配だ", reveal_hint: "子どもや安全のことを尋ねる", min_trust: 3, resolved_when: "欄干など、子どもを守る備えが示される" },
-    { id: "c5", owner: "ferry", category: "工事", text: "工事のあいだ船が出せず収入が途絶える", reveal_hint: "工事中の川の使い方を尋ねる", min_trust: 3, resolved_when: "工事中も船を出せる段取りが示される" },
+    { id: "c1", owner: "mayor", category: "予算", text: "村の蓄えが少なく大きな橋は作れない", importance: 9, reveal_hint: "費用や工期を尋ねる", min_trust: 1, resolved_when: "村の予算内に収まる規模の案が示される" },
+    { id: "c2", owner: "ferry", category: "仕事", text: "橋ができると渡し守の仕事がなくなる", importance: 7, reveal_hint: "渡し守の暮らしに触れる", min_trust: 6, resolved_when: "渡し守の収入や役割が守られる案が示される" },
+    { id: "c3", owner: "mayor", category: "行事", text: "祭りの行列の道筋が変わってしまう", importance: 4, reveal_hint: "村の行事や慣習を尋ねる", min_trust: 3, resolved_when: "祭りの行列の経路が確保される" },
+    { id: "c4", owner: "mayor", category: "安全", text: "子どもが橋から川へ落ちないか心配だ", importance: 6, reveal_hint: "子どもや安全のことを尋ねる", min_trust: 7, resolved_when: "欄干など、子どもを守る備えが示される" },
+    { id: "c5", owner: "ferry", category: "工事", text: "工事のあいだ船が出せず収入が途絶える", importance: 5, reveal_hint: "工事中の川の使い方を尋ねる", min_trust: 6, resolved_when: "工事中も船を出せる段取りが示される" },
   ],
   briefing: [
     { label: "計画", text: "県の補助で、来年度中に川へ橋を 1 本かける" },
@@ -46,8 +50,11 @@ const scenario = () => ({
 });
 
 const line = (speaker = "mayor", text = "ふむ…") => ({ speaker, text });
-/** 信頼度が動くターンには気分の更新が必須 */
+/** 信頼度が動くターンには、その人の気分の更新が必須 */
 const calm = [{ character: "mayor", emoji: "😌", label: "安心" }];
+const calmFerry = [{ character: "ferry", emoji: "😌", label: "安心" }];
+/** 1 人の信頼度を動かす (気分の更新つき) */
+const up = (character: string, delta = 1) => ({ trust_changes: [{ character, delta }], moods: [{ character, emoji: "😌", label: "安心" }] });
 
 /** 5 つの懸念それぞれへの提案を含む発言と、その引用 */
 const BIG = "小さな木橋にして費用を抑え、行列は川沿いの道を通し、渡し守には渡し賃を残してはどうでしょう。欄干は高くして、工事は船の少ない冬に行います。";
@@ -92,12 +99,12 @@ test("不正なシナリオは理由つきで拒否される", () => {
   const e = new Engine();
   const bad = scenario();
   bad.concerns[0].owner = "nobody";
-  for (const c of bad.concerns) c.min_trust = 4;
+  for (const c of bad.concerns) c.min_trust = 9;
   const r = e.startScenario(bad);
   assert.equal(r.ok, false);
   const msg = errorsOf(r);
   assert.match(msg, /nobody/);
-  assert.match(msg, /最初から話せる本音 \(min_trust が初期の信頼度 2 以下\) をちょうど 2 個にしてください \(いま 0 個\)/);
+  assert.match(msg, /最初から話せる本音 \(min_trust が owner の trust_start 以下\) をちょうど 2 個にしてください \(いま 0 個\)/);
   assert.equal(e.phase, "setup");
   assert.equal(e.startScenario({ title: "x" }).ok, false);
 });
@@ -105,7 +112,7 @@ test("不正なシナリオは理由つきで拒否される", () => {
 test("公開状態に隠し情報が含まれない / 懸念ボードは空から始まる", () => {
   const e = started();
   const json = JSON.stringify(e.publicState());
-  for (const secret of ["村の蓄えが少なく", "渡し守の仕事がなくなる", "祭りの行列", "子どもが橋から", "船が出せず", "reveal_hint", "resolved_when", "persona", "慎重で面倒見"]) {
+  for (const secret of ["村の蓄えが少なく", "渡し守の仕事がなくなる", "祭りの行列", "子どもが橋から", "船が出せず", "reveal_hint", "resolved_when", "persona", "慎重で面倒見", "trust_start", "understanding"]) {
     assert.ok(!json.includes(secret), `${secret} が漏れている`);
   }
   // 未発見の懸念は存在も分類 (category) も送らない
@@ -116,7 +123,7 @@ test("公開状態に隠し情報が含まれない / 懸念ボードは空か�
 test("懸念ボードは見つけた順に増え、進行の要約はログに出ない", () => {
   const e = playing("お祭りのことを聞かせてください。");
   // c3 → c1 の順に見つかる (シナリオの並びとは無関係)
-  assert.ok(reply(e, { concern_updates: [{ id: "c3", to: "revealed" }] }).ok);
+  assert.ok(reply(e, { concern_updates: [{ id: "c3", to: "revealed", asked: "お祭りのこと" }] }).ok);
   assert.deepEqual(e.publicState().concerns.map((c) => [c.id, c.status]), [["c3", "revealed"]]);
   e.act({ text: BIG });
   const r2 = e.reply({
@@ -175,31 +182,53 @@ test("pendingWork は reply するまで同じ仕事を返し続ける", () => {
   assert.equal(e.pendingWork(), null);
 });
 
-test("信頼度が足りない本音は出せない / trust_delta は先に適用される", () => {
-  const e = playing();
-  // 初期 trust=2、c2 は min_trust=3
-  const bad = reply(e, { concern_updates: [{ id: "c2", to: "revealed" }] });
+test("信頼度はキャラクターごと。本音を持つ人の信頼度が足りなければ出せない / 増減は先に適用される", () => {
+  const e = playing("渡し守さんの暮らしはどうですか？");
+  assert.deepEqual(e.fullState().trust, { mayor: 6, ferry: 4 }); // シナリオで決めた、各キャラの最初の信頼度
+  // c2 は渡し守 (信頼度 4) の本音で、min_trust=6。村長の信頼度は関係ない
+  const bad = reply(e, { concern_updates: [{ id: "c2", to: "revealed", asked: "渡し守さんの暮らし" }] });
   assert.equal(bad.ok, false);
-  assert.match(errorsOf(bad), /信頼度 2 < 必要 3/);
+  assert.match(errorsOf(bad), /ferry の信頼度 4 < 必要 6/);
+  assert.match(errorsOf(reply(e, { ...up("mayor", 2), concern_updates: [{ id: "c2", to: "revealed", asked: "渡し守さんの暮らし" }] })), /ferry の信頼度 4 < 必要 6/);
+  assert.match(errorsOf(reply(e, { ...up("ferry", 1), concern_updates: [{ id: "c2", to: "revealed", asked: "渡し守さんの暮らし" }] })), /ferry の信頼度 5 < 必要 6/);
   assert.equal(e.phase, "ai_turn"); // 失敗しても手番は進まない
-  // +1 と同時なら通る
-  const ok = reply(e, { trust_delta: 1, trust_reason: "要約してくれた", moods: calm, concern_updates: [{ id: "c2", to: "revealed" }] });
+  // 渡し守の +2 と同時なら通る
+  const ok = reply(e, { trust_changes: [{ character: "ferry", delta: 2, reason: "暮らしを気遣ってくれた" }], moods: calmFerry, concern_updates: [{ id: "c2", to: "revealed", asked: "渡し守さんの暮らし" }] });
   assert.ok(ok.ok, errorsOf(ok));
   const s = e.publicState();
-  assert.equal(e.fullState().trust, 3);
+  assert.deepEqual(e.fullState().trust, { mayor: 6, ferry: 6 });
   assert.equal(s.concerns.find((c) => c.id === "c2")?.text, "橋ができると渡し守の仕事がなくなる");
-  assert.deepEqual(e.fullState().trust_history, [{ turn: 1, from: 2, to: 3, reason: "要約してくれた" }]);
+  assert.deepEqual(e.fullState().trust_history, [{ turn: 1, character: "ferry", from: 4, to: 6, reason: "暮らしを気遣ってくれた" }]);
+});
+
+test("信頼度の増減: 1 人 1 ターン ±2 まで / 1〜10 に収まる / 存在しない人・重複は不可 / 2 人同時に動かせる", () => {
+  const parse = (delta: number) => replySchema.safeParse({ turn: 1, lines: [line()], trust_changes: [{ character: "mayor", delta }] }).success;
+  assert.deepEqual([parse(-2), parse(2), parse(-3), parse(3)], [true, true, false, false]);
+  const e = playing("お二人とも、ありがとうございます。");
+  assert.match(errorsOf(reply(e, { trust_changes: [{ character: "ghost", delta: 1 }] })), /trust_changes: キャラクター "ghost"/);
+  assert.match(errorsOf(reply(e, { trust_changes: [{ character: "mayor", delta: 1 }, { character: "mayor", delta: 1 }], moods: calm })), /"mayor" が重複/);
+  must(reply(e, { trust_changes: [{ character: "mayor", delta: 2 }, { character: "ferry", delta: -2 }], moods: [...calm, { character: "ferry", emoji: "😠", label: "不満" }] }));
+  assert.deepEqual(e.fullState().trust, { mayor: 8, ferry: 2 });
+  e.act({ text: "続けます" });
+  must(e.reply({ turn: 2, lines: [line()], trust_changes: [{ character: "mayor", delta: 2 }, { character: "ferry", delta: -2 }], moods: [...calm, ...calmFerry] }));
+  e.act({ text: "さらに続けます" });
+  must(e.reply({ turn: 3, lines: [line()], trust_changes: [{ character: "mayor", delta: 2 }, { character: "ferry", delta: -2 }], moods: [...calm, ...calmFerry] }));
+  assert.deepEqual(e.fullState().trust, { mayor: 10, ferry: 1 }); // 上限 10・下限 1
 });
 
 test("信頼度は画面に出さない: 公開状態にもログにも現れず、動かしたターンは moods が必須", () => {
   const e = playing();
-  const noMood = reply(e, { trust_delta: 1, trust_reason: "要約してくれた" });
+  const noMood = reply(e, { trust_changes: [{ character: "mayor", delta: 1, reason: "要約してくれた" }] });
   assert.equal(noMood.ok, false);
-  assert.match(errorsOf(noMood), /moods/);
-  assert.equal(e.fullState().trust, 2); // 失敗したので変わっていない
-  assert.ok(reply(e, { trust_delta: 1, trust_reason: "要約してくれた", moods: calm, lines: [line("mayor", "そう、その通りじゃ。")] }).ok);
+  assert.match(errorsOf(noMood), /"mayor" の信頼度が動くターンは、その人の moods も更新/);
+  // 気分を更新するのは、信頼度が動いた本人
+  assert.match(errorsOf(reply(e, { trust_changes: [{ character: "ferry", delta: 1 }], moods: calm })), /"ferry" の信頼度が動くターン/);
+  assert.deepEqual(e.fullState().trust, { mayor: 6, ferry: 4 }); // 失敗したので変わっていない
+  assert.ok(reply(e, { trust_changes: [{ character: "mayor", delta: 1, reason: "要約してくれた" }], moods: calm, lines: [line("mayor", "そう、その通りじゃ。")] }).ok);
   const s = e.publicState();
   assert.ok(!("trust" in s) && !("maxTrust" in s));
+  // 各キャラの信頼度・物わかりも送らない
+  assert.deepEqual(Object.keys(s.scenario!.characters[0]).sort(), ["emoji", "id", "mood", "name", "role"]);
   assert.ok(!s.log.some((l) => /信頼/.test(l.text)), "ログに信頼度が出ている");
   assert.deepEqual(s.scenario?.characters[0].mood, { emoji: "😌", label: "安心" }); // 手がかりは気分で伝わる
   // 動かさないターンは moods 不要
@@ -238,7 +267,7 @@ test("段階を飛ばせない (hidden→resolved) と、同一懸念の二重�
   assert.equal(reply(e, { concern_updates: [{ id: "c1", to: "resolved", note: "これで解決した" }] }).ok, false);
   const dup = reply(e, {
     concern_updates: [
-      { id: "c1", to: "revealed" },
+      { id: "c1", to: "revealed", asked: Q1 },
       { id: "c1", to: "proposed", note: "二重更新のテスト", quote: Q1 },
     ],
   });
@@ -262,7 +291,7 @@ test("proposed→resolved は次のターン以降 / 差し戻しもできる", 
 
   // 差し戻し
   assert.equal(e.act({ text: BIG }), null);
-  assert.ok(e.reply({ turn: 3, lines: [line()], trust_delta: 1, moods: calm, concern_updates: [{ id: "c2", to: "proposed", note: "渡し賃を残す", quote: Q2 }] }).ok);
+  assert.ok(e.reply({ turn: 3, lines: [line()], ...up("ferry", 2), concern_updates: [{ id: "c2", to: "proposed", note: "渡し賃を残す", quote: Q2 }] }).ok);
   assert.equal(e.act({ text: "いかがですか" }), null);
   assert.ok(e.reply({ turn: 4, lines: [line("ferry")], concern_updates: [{ id: "c2", to: "revealed", note: "渡し賃だけでは生活が成り立たない" }] }).ok);
   assert.equal(e.publicState().concerns[1].status, "revealed");
@@ -300,8 +329,9 @@ test("持ち帰りで終了: epilogue が必須で、検討中に進めること
  */
 function nearlyAgreed() {
   const e = playing(BIG);
-  // c2 は信頼度が要る: trust 2→3
-  assert.ok(reply(e, { trust_delta: 1, moods: calm, concern_updates: [{ id: "c1", to: "proposed", note: "小さな木橋", quote: Q1 }] }).ok);
+  // c4 (村長) と c2・c5 (渡し守) は信頼度が要る: 村長 6→7、渡し守 4→6
+  const r1 = reply(e, { trust_changes: [{ character: "mayor", delta: 1 }, { character: "ferry", delta: 2 }], moods: [...calm, ...calmFerry], concern_updates: [{ id: "c1", to: "proposed", note: "小さな木橋", quote: Q1 }] });
+  assert.ok(r1.ok, errorsOf(r1));
   // 毎ターン、前のターンの案で合意しつつ、次の懸念に案が当たる
   const next = [["c3", "川沿いの道", Q3], ["c4", "欄干を高くする", Q4], ["c5", "工事は冬に", Q5], ["c2", "渡し賃を残す", Q2]] as const;
   let prev = "c1";
@@ -318,17 +348,17 @@ const resolveLast = [{ id: "c2", to: "resolved" as const, note: "c2 で合意" }
 
 test("1 回の返答で見つかる本音は 1 つまで (複数キャラでも、提案が当たった場合も数える)", () => {
   const e = playing("お祭りと予算のことを教えてください。");
-  const two = reply(e, { concern_updates: [{ id: "c1", to: "revealed" }, { id: "c3", to: "revealed" }] });
+  const two = reply(e, { concern_updates: [{ id: "c1", to: "revealed", asked: "予算のことを教えて" }, { id: "c3", to: "revealed", asked: "お祭りと予算" }] });
   assert.equal(two.ok, false);
   assert.match(errorsOf(two), /見つけられる本音は 1 つまで.*c1, c3/);
   assert.equal(e.publicState().concerns.length, 0); // 何も反映されない
   // 本音 1 つ + 提案が当たって未発見からいきなり検討中、も 2 つと数える
   const e2 = playing(BIG);
-  assert.match(errorsOf(reply(e2, { concern_updates: [{ id: "c3", to: "revealed" }, { id: "c1", to: "proposed", note: "小さな木橋", quote: Q1 }] })), /1 つまで/);
+  assert.match(errorsOf(reply(e2, { concern_updates: [{ id: "c3", to: "revealed", asked: Q3 }, { id: "c1", to: "proposed", note: "小さな木橋", quote: Q1 }] })), /1 つまで/);
   // 1 つなら通る。すでに見つかっている懸念の進行は数えない
-  assert.ok(reply(e2, { concern_updates: [{ id: "c3", to: "revealed" }] }).ok);
+  assert.ok(reply(e2, { concern_updates: [{ id: "c3", to: "revealed", asked: Q3 }] }).ok);
   e2.act({ text: BIG });
-  assert.ok(e2.reply({ turn: 2, lines: [line()], concern_updates: [{ id: "c3", to: "proposed", note: "川沿いの道", quote: Q3 }, { id: "c1", to: "revealed" }] }).ok);
+  assert.ok(e2.reply({ turn: 2, lines: [line()], concern_updates: [{ id: "c3", to: "proposed", note: "川沿いの道", quote: Q3 }, { id: "c1", to: "revealed", asked: Q1 }] }).ok);
   assert.deepEqual(e2.publicState().concerns.map((c) => [c.id, c.status]), [["c3", "proposed"], ["c1", "revealed"]]);
 });
 
@@ -359,7 +389,8 @@ test("ターン上限で終了し、半分未満の解消なら持ち帰り", ()
   assert.equal(s.phase, "ended");
   assert.equal(s.ending?.reason, "turn_limit");
   assert.equal(s.ending?.resolved, 1);
-  assert.equal(s.ending?.type, "carry_over"); // 1/5 は半分未満
+  assert.equal(s.ending?.type, "carry_over"); // 解消した重要度 9 は、合計 31 の半分未満
+  assert.deepEqual(s.ending?.importance, { resolved: 9, total: 31 });
 });
 
 test("replay: 同じシナリオで最初から (AI の手は不要) / 進行中の reply は無効になる", () => {
@@ -368,7 +399,7 @@ test("replay: 同じシナリオで最初から (AI の手は不要) / 進行中
   const s = e.publicState();
   assert.equal(s.phase, "player_turn");
   assert.equal(s.turn, 0);
-  assert.equal(e.fullState().trust, 2);
+  assert.deepEqual(e.fullState().trust, { mayor: 6, ferry: 4 });
   assert.equal(s.log.length, 1);
   assert.equal(reply(e).ok, false); // 古い手番への返答は弾かれる
 });
@@ -389,7 +420,7 @@ test("waitForWork: 仕事が来たら待っている側が起きる / タイム�
 /** 持ち帰りで終わらせた状態 (c1 だけ見つかっている) */
 function endedWithOneFound() {
   const e = playing("予算はどのくらいですか？");
-  assert.ok(reply(e, { concern_updates: [{ id: "c1", to: "revealed" }] }).ok);
+  assert.ok(reply(e, { concern_updates: [{ id: "c1", to: "revealed", asked: "予算はどのくらい" }] }).ok);
   e.act({ text: "今日はここまでにします" }, true);
   assert.ok(e.reply({ turn: 2, lines: [line()], epilogue: "また話そう。" }).ok);
   assert.equal(e.phase, "ended");
@@ -413,6 +444,10 @@ test("終了すると AI に振り返りの依頼が届く (隠し情報つき�
   assert.equal(r.concerns.find((c) => c.id === "c1")?.status, "revealed");
   assert.equal(r.ending.reason, "deferred");
   assert.equal(r.difficulty, "普通");
+  assert.deepEqual(r.characters, [
+    { id: "mayor", name: "村長", trust_start: 6, trust_end: 6, understanding: 6 },
+    { id: "ferry", name: "渡し守", trust_start: 4, trust_end: 4, understanding: 4 },
+  ]);
   // 依頼は提出されるまで同じものが返り続ける
   assert.deepEqual(e.pendingWork(), w);
   // 提出前の公開状態には振り返りが無い
@@ -512,7 +547,7 @@ test("返答に、隠し事を匂わせる仕草や括弧書きの動作があ�
   }
   // 気分のラベル・締めくくりの一文にも同じ検査がかかる
   const e2 = playing();
-  assert.match(errorsOf(reply(e2, { trust_delta: 1, moods: [{ character: "mayor", emoji: "😶", label: "言い淀む" }] })), /moods \(mayor\) の label/);
+  assert.match(errorsOf(reply(e2, { trust_changes: [{ character: "mayor", delta: 1 }], moods: [{ character: "mayor", emoji: "😶", label: "言い淀む" }] })), /moods \(mayor\) の label/);
   const e3 = started();
   e3.act({ text: "ここまでにします" }, true);
   assert.match(errorsOf(reply(e3, { epilogue: "村長は何か言いかけて口をつぐんだ。" })), /epilogue に、相手を誘導する描写/);
@@ -557,15 +592,15 @@ const walk = (id: string, evidence: string[], note = "小さな木橋にして�
 
 /**
  * c1 の本音がターン 1、c3 の本音がターン 2 に見つかり (見つかる本音は 1 回の返答で 1 つまで)、
- * プレイヤーが話を重ねた状態 (ターン 3 の返答待ち)。trustBump=false だと、信頼度は初期値 2 のまま。
+ * プレイヤーが話を重ねた状態 (ターン 3 の返答待ち)。trustBump=false だと、村長の信頼度は初期値 6 のまま。
  */
 function ripe(trustBump = true) {
   const e = started();
   e.act({ text: "村の予算はどのくらいですか？お祭りのことも聞かせてください。" });
-  const r1 = e.reply({ turn: 1, lines: [line()], ...(trustBump ? { trust_delta: 1, moods: calm } : {}), concern_updates: [{ id: "c1", to: "revealed" }] });
+  const r1 = e.reply({ turn: 1, lines: [line()], ...(trustBump ? up("mayor") : {}), concern_updates: [{ id: "c1", to: "revealed", asked: "村の予算はどのくらい" }] });
   assert.ok(r1.ok, errorsOf(r1));
   e.act({ text: T2 });
-  assert.ok(e.reply({ turn: 2, lines: [line()], concern_updates: [{ id: "c3", to: "revealed" }] }).ok);
+  assert.ok(e.reply({ turn: 2, lines: [line()], concern_updates: [{ id: "c3", to: "revealed", asked: "お祭りの行列" }] }).ok);
   e.act({ text: T3 });
   return e;
 }
@@ -588,8 +623,8 @@ test("条件がそろえば、相手の側から歩み寄れる (検討中に進
 });
 
 test("歩み寄りの条件: 信頼度 / 別々のターンの根拠 / 発言に実在する引用", () => {
-  // 信頼度が足りない (初期値 2 のまま)
-  assert.match(errorsOf(reply3(ripe(false), [walk("c1", E1)])), /信頼度 2 < 必要 3/);
+  // 本音を持つ村長の信頼度が足りない (初期値 6 のまま。普通では 7 が要る)
+  assert.match(errorsOf(reply3(ripe(false), [walk("c1", E1)])), /mayor の信頼度 6 < 必要 7/);
   // 根拠が 1 つのターン (ターン 3) にしかない
   assert.match(errorsOf(reply3(ripe(), [walk("c1", ["小さな木橋なら", "費用を抑えられる"])])), /1 つのターンにしかありません/);
   // 本音が見えたターン (1) の発言は根拠にならない
@@ -607,8 +642,8 @@ test("歩み寄りの条件: 信頼度 / 別々のターンの根拠 / 発言に
 
 test("歩み寄りは、本音が見えていて案が無い懸念にだけ使える / 解消には使えない", () => {
   const e = ripe();
-  // c2 は未発見 (hidden)
-  assert.match(errorsOf(reply3(e, [walk("c2", E1)])), /revealed.*現在 hidden/);
+  // c4 は未発見 (hidden。持ち主の村長の信頼度は足りている)
+  assert.match(errorsOf(reply3(e, [walk("c4", E1)])), /revealed.*現在 hidden/);
   // initiative は to=proposed のときだけ
   assert.match(errorsOf(reply3(e, [{ id: "c1", to: "revealed", initiative: true }])), /to=proposed のときだけ/);
   // 提案済み (proposed) の懸念は revealed ではない: 一度歩み寄ったら、同じ懸念に続けては使えない
@@ -661,8 +696,14 @@ test("AI に、歩み寄りに必要な条件が毎ターン渡る / 振り返�
   const e = ripe();
   const d = work(e).digest;
   assert.equal(d.initiative_cooldown_ok, true);
-  assert.equal(d.concerns.find((c) => c.id === "c1")?.initiative_trust, 3);
-  assert.equal(d.concerns.find((c) => c.id === "c2")?.initiative_trust, 4); // min_trust 3 + 1
+  assert.equal(d.concerns.find((c) => c.id === "c1")?.initiative_trust, 7);
+  assert.equal(d.concerns.find((c) => c.id === "c4")?.initiative_trust, 8); // min_trust 7 + 1
+  // 各キャラのいまの信頼度と物わかりも毎ターン渡る
+  assert.deepEqual(
+    d.characters.map((c) => [c.id, c.trust, c.trust_level, c.understanding]),
+    [["mayor", 7, "好意的", 6], ["ferry", 4, "警戒", 4]],
+  );
+  assert.match(d.characters[1].understanding_note, /^悪い: 汲み取りは少なめ/);
   assert.equal(d.concerns.find((c) => c.id === "c1")?.since_turn, 1);
   assert.equal(d.concerns.find((c) => c.id === "c2")?.since_turn, undefined); // 未発見
 
@@ -758,18 +799,27 @@ test("名乗りの外し方: フルネーム・空白を詰めた名前・名字
 // ---- 難易度 ---------------------------------------------------------------------------
 
 const EXTRA = [
-  { id: "c6", owner: "ferry", category: "景色", text: "川辺の眺めが橋で変わってしまう", reveal_hint: "川辺の思い出を尋ねる", min_trust: 1, resolved_when: "眺めを残す橋の形が示される" },
-  { id: "c7", owner: "mayor", category: "隣村", text: "隣村に借りを作るのが気に入らない", reveal_hint: "隣村との関係を尋ねる", min_trust: 3, resolved_when: "対等な関係を保つ取り決めが示される" },
+  { id: "c6", owner: "ferry", category: "景色", text: "川辺の眺めが橋で変わってしまう", importance: 2, reveal_hint: "川辺の思い出を尋ねる", min_trust: 2, resolved_when: "眺めを残す橋の形が示される" },
+  { id: "c7", owner: "mayor", category: "隣村", text: "隣村に借りを作るのが気に入らない", importance: 9, reveal_hint: "隣村との関係を尋ねる", min_trust: 5, resolved_when: "対等な関係を保つ取り決めが示される" },
 ];
 type Fixture = ReturnType<typeof scenario> & { opening_moods?: Array<{ character: string; emoji: string; label: string }> };
-/** その難易度の懸念の数と、最初から話せる本音の数に合わせたシナリオ (先頭から open_at_start 個を話せるものにする) */
-function scenarioOf(level: Difficulty): Fixture {
+/**
+ * その難易度に合わせたシナリオ: 信頼度と物わかりは、村長が平均 + 1、渡し守が平均 - 1。
+ * 懸念の数と、最初から話せる本音の数もそろえる (先頭から open_at_start 個を、持ち主の信頼度で話せるものにする)
+ */
+function scenarioOf(level: PresetDifficulty): Fixture {
   const s = scenario();
-  const { concerns, openAtStart, trustStart } = DIFFICULTY_PRESETS[level];
-  s.concerns = [...s.concerns, ...EXTRA].slice(0, concerns).map((c, i) => ({ ...c, min_trust: i < openAtStart ? Math.min(c.min_trust, trustStart) : Math.max(c.min_trust, trustStart + 1) }));
+  const { concerns, openAtStart, trustStart, understanding } = DIFFICULTY_PRESETS[level];
+  const start = { mayor: trustStart + 1, ferry: trustStart - 1 };
+  s.characters[0] = { ...s.characters[0], trust_start: start.mayor, understanding: understanding + 1 };
+  s.characters[1] = { ...s.characters[1], trust_start: start.ferry, understanding: understanding - 1 };
+  s.concerns = [...s.concerns, ...EXTRA].slice(0, concerns).map((c, i) => {
+    const own = start[c.owner as keyof typeof start];
+    return { ...c, min_trust: i < openAtStart ? Math.min(c.min_trust, own) : Math.max(c.min_trust, own + 1) };
+  });
   return s;
 }
-function startedAt(level: Difficulty, edit: (s: Fixture) => void = () => {}) {
+function startedAt(level: PresetDifficulty, edit: (s: Fixture) => void = () => {}) {
   const e = new Engine();
   e.requestNewGame("橋の話", level);
   const s = scenarioOf(level);
@@ -800,26 +850,26 @@ test("難易度で懸念の数が決まり、ちょうどその数でないシ�
   assert.match(errorsOf(e9.startScenario(nine)), /^concerns:/m);
 });
 
-test("難易度で初期の信頼度 (険悪度) が決まる / 冒頭の気分はシナリオの opening_moods から / やり直しても同じ", () => {
-  for (const [level, trust] of [["easy", 3], ["normal", 2], ["hard", 0]] as const) {
+test("最初の信頼度は登場人物ごと (平均は難易度の値) / 冒頭の気分はシナリオの opening_moods から / やり直しても同じ", () => {
+  for (const [level, trust] of [["easy", { mayor: 8, ferry: 6 }], ["normal", { mayor: 6, ferry: 4 }], ["hard", { mayor: 3, ferry: 1 }]] as const) {
     const e = startedAt(level);
-    assert.equal(e.fullState().trust, trust, level);
+    assert.deepEqual(e.fullState().trust, trust, level);
     assert.equal(e.publicState().difficulty, level);
     assert.ok(!("trust" in e.publicState()));
   }
-  // 難しい (信頼度 0) では、min_trust 0 の懸念が無いと最初に話せることが無い
+  // 難しい (村長 3・渡し守 1) で、どちらも最初に話せる本音が無い
   const e = new Engine();
   e.requestNewGame("", "hard");
   const noOpen = scenarioOf("hard");
-  noOpen.concerns[0].min_trust = 1;
-  assert.match(errorsOf(e.startScenario(noOpen)), /難易度「難しい」では、最初から話せる本音 \(min_trust が初期の信頼度 0 以下\) をちょうど 1 個にしてください \(いま 0 個\)/);
+  noOpen.concerns[0].min_trust = 4;
+  assert.match(errorsOf(e.startScenario(noOpen)), /難易度「難しい」では、最初から話せる本音 \(min_trust が owner の trust_start 以下\) をちょうど 1 個にしてください \(いま 0 個\)/);
 
   const hard = startedAt("hard", (s) => (s.opening_moods = [{ character: "mayor", emoji: "😠", label: "不信感" }]));
   const moods = Object.fromEntries(hard.publicState().scenario!.characters.map((c) => [c.id, `${c.mood.emoji} ${c.mood.label}`]));
   assert.deepEqual(moods, { mayor: "😠 不信感", ferry: "😐 ふつう" }); // 指定の無い人は「ふつう」
   hard.act({ text: "こんにちは" });
   assert.ok(hard.replay() === null);
-  assert.equal(hard.fullState().trust, 0);
+  assert.deepEqual(hard.fullState().trust, { mayor: 3, ferry: 1 });
   assert.equal(hard.publicState().difficulty, "hard");
   assert.equal(hard.publicState().scenario!.characters[0].mood.label, "不信感");
   // 冒頭の気分にも、存在しない人や誘導する言葉は使えない
@@ -832,13 +882,15 @@ test("難易度で初期の信頼度 (険悪度) が決まる / 冒頭の気分�
 test("簡単: 物わかりがよく、本音が見えた後 1 ターン向き合えば相手から歩み寄れる", () => {
   const e = startedAt("easy");
   e.act({ text: "村の予算はどのくらいですか？" });
-  must(e.reply({ turn: 1, lines: [line()], concern_updates: [{ id: "c1", to: "revealed" }] }));
+  must(e.reply({ turn: 1, lines: [line()], concern_updates: [{ id: "c1", to: "revealed", asked: "村の予算" }] }));
   e.act({ text: T3 });
   const w = work(e);
   assert.equal(w.difficulty, "簡単");
-  assert.match(w.understanding, /物わかりがよい/);
+  // 物わかりは各キャラの値 (村長 9・渡し守 7) で伝わる
+  assert.match(w.digest.characters[0].understanding_note, /^とてもよい: プレイヤーの言いたいことを好意的に汲み取る/);
+  assert.match(w.digest.characters[1].understanding_note, /^よい: /);
   assert.equal(w.digest.initiative_min_turns, 1);
-  assert.equal(w.digest.concerns.find((c) => c.id === "c1")?.initiative_trust, 2);
+  assert.equal(w.digest.concerns.find((c) => c.id === "c1")?.initiative_trust, 5);
   must(e.reply({ turn: 2, lines: [line()], concern_updates: [walk("c1", ["小さな木橋なら費用を抑えられる"])] }));
   assert.equal(e.publicState().concerns[0].status, "proposed");
 });
@@ -846,21 +898,23 @@ test("簡単: 物わかりがよく、本音が見えた後 1 ターン向き合
 test("難しい: 物わかりが悪く、歩み寄りには高い信頼度と 3 ターン分の積み重ねが要る", () => {
   const e = startedAt("hard");
   e.act({ text: "村の予算はどのくらいですか？" });
-  must(e.reply({ turn: 1, lines: [line()], concern_updates: [{ id: "c1", to: "revealed" }] }));
-  // ターン 2〜4: 予算の話を重ね、信頼度 0 → 3
+  must(e.reply({ turn: 1, lines: [line()], concern_updates: [{ id: "c1", to: "revealed", asked: "村の予算" }] }));
+  // ターン 2〜4: 予算の話を重ね、村長の信頼度 3 → 6
   [T2, T3, "木橋なら、毎年の修繕費も安く済みますね。"].forEach((text, i) => {
     e.act({ text });
-    must(e.reply({ turn: i + 2, lines: [line()], trust_delta: 1, moods: calm }));
+    must(e.reply({ turn: i + 2, lines: [line()], ...up("mayor") }));
   });
   e.act({ text: "予算の範囲で進めたいと思います。" });
   const w = work(e);
-  assert.match(w.understanding, /物わかりが悪い/);
+  // 物わかりは村長 3・渡し守 1
+  assert.match(w.digest.characters[0].understanding_note, /^悪い: /);
+  assert.match(w.digest.characters[1].understanding_note, /^とても悪い: プレイヤーの言葉を字面どおりにしか受け取らず/);
   assert.equal(w.digest.initiative_min_turns, 3);
-  assert.equal(w.digest.concerns.find((c) => c.id === "c1")?.initiative_trust, 4);
-  // 信頼度 3 では足りない
-  assert.match(errorsOf(e.reply({ turn: 5, lines: [line()], concern_updates: [walk("c1", E1)] })), /信頼度 3 < 必要 4/);
-  const bump = { turn: 5, lines: [line()], trust_delta: 1, moods: calm };
-  // 信頼度 4 でも、根拠が 2 つでは足りない / 3 つあっても 2 つのターンからだけでは足りない
+  assert.equal(w.digest.concerns.find((c) => c.id === "c1")?.initiative_trust, 8);
+  // 信頼度 6 では足りない
+  assert.match(errorsOf(e.reply({ turn: 5, lines: [line()], concern_updates: [walk("c1", E1)] })), /mayor の信頼度 6 < 必要 8/);
+  const bump = { turn: 5, lines: [line()], ...up("mayor", 2) };
+  // 信頼度 8 でも、根拠が 2 つでは足りない / 3 つあっても 2 つのターンからだけでは足りない
   assert.match(errorsOf(e.reply({ ...bump, concern_updates: [walk("c1", E1)] })), /3 つ以上、別のターンから/);
   assert.match(errorsOf(e.reply({ ...bump, concern_updates: [walk("c1", ["大きな橋は村の負担が重い", "道が変わると困り", "小さな木橋なら費用を抑えられる"])] })), /2 つのターンにしかありません.*3 ターン以上/);
   must(e.reply({ ...bump, concern_updates: [walk("c1", [...E1, "毎年の修繕費も安く済み"])] }));
@@ -883,27 +937,65 @@ test("最初から話せる本音の数は難易度で決まり、ちょうど�
   const e = new Engine();
   e.requestNewGame("");
   const w = e.pendingWork() as Extract<Work, { type: "new_game" }>;
-  assert.deepEqual([w.difficulty.open_at_start, w.difficulty.trust_start], [2, 2]);
+  assert.deepEqual([w.difficulty.open_at_start, w.difficulty.trust_start], [2, 5]);
   const three = scenario();
   three.concerns[3].min_trust = 2; // c1, c3, c4 が話せる
-  assert.match(errorsOf(e.startScenario(three)), /ちょうど 2 個にしてください \(いま 3 個\)。残りの min_trust は 3〜4 にする/);
+  assert.match(errorsOf(e.startScenario(three)), /ちょうど 2 個にしてください \(いま 3 個: c1, c3, c4\)。残りの min_trust は、owner の trust_start \+ 1 〜 9 にする/);
+  // 話せるかどうかは持ち主の信頼度で決まる: 渡し守を 6 に上げると c2・c5 も話せる
+  const ferryUp = scenario();
+  ferryUp.characters[0].trust_start = 4;
+  ferryUp.characters[1].trust_start = 6;
+  assert.match(errorsOf(e.startScenario(ferryUp)), /いま 4 個: c1, c2, c3, c5/);
   assert.ok(e.startScenario(scenario()).ok);
 });
 
+test("登場人物の信頼度と物わかりは、平均が難易度の値 ±1 で、2 人以上なら人ごとに差がある", () => {
+  const e = new Engine();
+  e.requestNewGame(""); // 普通: どちらも平均 5
+  const w = e.pendingWork() as Extract<Work, { type: "new_game" }>;
+  assert.deepEqual([w.difficulty.trust_start, w.difficulty.understanding], [5, 5]);
+  assert.deepEqual(w.difficulty.trust_levels.map((l) => `${l.range} ${l.name}`), ["1〜2 険悪", "3〜4 警戒", "5〜6 様子見", "7〜8 好意的", "9〜10 信頼"]);
+  assert.equal(w.difficulty.understanding_levels.length, 5);
+  const edited = (edit: (s: ReturnType<typeof scenario>) => void) => {
+    const s = scenario();
+    edit(s);
+    return errorsOf(e.startScenario(s));
+  };
+  // 平均がずれている (村長 8・渡し守 7 → 平均 7.5)
+  assert.match(edited((s) => ((s.characters[0].understanding = 8), (s.characters[1].understanding = 7))), /物わかり \(understanding\)の平均を 4〜6 にしてください \(いま 8, 7 で平均 7\.5\)/);
+  // 全員同じ値
+  assert.match(edited((s) => ((s.characters[0].understanding = 5), (s.characters[1].understanding = 5))), /物わかり \(understanding\)が全員 5 です。persona \(人柄\) に合わせて、人ごとに差をつけて/);
+  assert.match(edited((s) => (s.characters[1].trust_start = 1)), /最初の信頼度 \(trust_start\)の平均を 4〜6 にしてください \(いま 6, 1 で平均 3\.5\)/);
+  // 範囲外はスキーマで弾く (信頼度は 1〜9 で始まる / 物わかりは 1〜10)
+  assert.match(edited((s) => (s.characters[0].trust_start = 10)), /characters\.0\.trust_start/);
+  assert.match(edited((s) => (s.characters[0].understanding = 0)), /characters\.0\.understanding/);
+  assert.equal(e.phase, "setup");
+  // 1 人だけなら、差は要らない (平均 = その人の値)
+  const solo = scenario();
+  solo.characters = [{ ...solo.characters[0], trust_start: 5, understanding: 5 }];
+  solo.concerns = solo.concerns.map((c) => ({ ...c, owner: "mayor", min_trust: c.id === "c1" || c.id === "c3" ? c.min_trust : 7 }));
+  const r = e.startScenario(solo);
+  assert.ok(r.ok, errorsOf(r));
+});
+
 test("パラメータを微調整して始められる (懸念の数・話せる本音・信頼度・ターン数・物わかり・歩み寄り)", () => {
-  const tuned = { ...DIFFICULTY_PRESETS.hard, concerns: 5, openAtStart: 2, trustStart: 2, turnsPerConcern: 4, understanding: "good" as const, initiativeTurns: 1, initiativeTrust: 2, initiativeCooldown: 1 };
+  const tuned = { ...DIFFICULTY_PRESETS.hard, concerns: 5, openAtStart: 2, nonNegotiable: 1, trustStart: 5, turnsPerConcern: 4, understanding: 8, initiativeTurns: 1, initiativeTrust: 2, initiativeCooldown: 1 };
   const e = new Engine();
   e.requestNewGame("", "hard", tuned);
   const brief = (e.pendingWork() as Extract<Work, { type: "new_game" }>).difficulty;
-  assert.deepEqual([brief.label, brief.concerns, brief.open_at_start, brief.trust_start, brief.turns], ["難しい (調整あり)", 5, 2, 2, 24]);
-  assert.match(brief.mood, /様子見/); // 冒頭の雰囲気は初期の信頼度に合わせる
+  assert.deepEqual([brief.label, brief.concerns, brief.open_at_start, brief.trust_start, brief.understanding, brief.turns], ["難しい (調整あり)", 5, 2, 5, 8, 24]);
   assert.equal(e.publicState().customized, true);
-  assert.ok(e.startScenario(scenario()).ok);
-  assert.equal(e.fullState().trust, 2);
+  // 物わかりの平均は、難易度ではなく調整した値 (8) に合わせる
+  assert.match(errorsOf(e.startScenario(scenario())), /物わかり \(understanding\)の平均を 7〜9 にしてください/);
+  const s = scenario();
+  s.characters[0].understanding = 9;
+  s.characters[1].understanding = 7;
+  assert.ok(e.startScenario(s).ok);
+  assert.deepEqual(e.fullState().trust, { mayor: 6, ferry: 4 });
   e.act({ text: "村の予算はどのくらいですか？" });
   const w = work(e);
   assert.equal(w.difficulty, "難しい (調整あり)");
-  assert.match(w.understanding, /物わかりがよい/); // 難易度ではなく、調整した値に従う
+  assert.match(w.digest.characters[0].understanding_note, /^とてもよい: /);
   assert.equal(w.digest.initiative_min_turns, 1);
   // 調整せずに始めたら「調整あり」は付かない
   const plain = new Engine();
@@ -915,9 +1007,9 @@ test("ブラウザから届いた難易度とパラメータを確かめる", ()
   assert.deepEqual(parseDifficulty(undefined, undefined), { level: "normal", params: DIFFICULTY_PRESETS.normal });
   assert.deepEqual(parseDifficulty("hard", null), { level: "hard", params: DIFFICULTY_PRESETS.hard });
   // 一部だけ送られたら、残りはその難易度の初期値
-  const r = parseDifficulty("easy", { concerns: 6, understanding: "poor" });
+  const r = parseDifficulty("easy", { concerns: 6, understanding: 3 });
   assert.ok(!("error" in r));
-  assert.deepEqual(r.params, { ...DIFFICULTY_PRESETS.easy, concerns: 6, understanding: "poor" });
+  assert.deepEqual(r.params, { ...DIFFICULTY_PRESETS.easy, concerns: 6, understanding: 3 });
   const error = (level: unknown, params: unknown) => {
     const x = parseDifficulty(level, params);
     return "error" in x ? x.error : "";
@@ -925,10 +1017,132 @@ test("ブラウザから届いた難易度とパラメータを確かめる", ()
   assert.match(error("nightmare", undefined), /不明な難易度/);
   assert.match(error("normal", "x"), /形式/);
   assert.match(error("normal", { concerns: 9 }), /「懸念の数」は 3〜8 の整数/);
-  assert.match(error("normal", { trustStart: 1.5 }), /「最初の信頼度」は 0〜3 の整数/);
-  assert.match(error("normal", { initiativeTrust: "3" }), /「歩み寄りに要る信頼度」/);
-  assert.match(error("normal", { understanding: "genius" }), /物わかり/);
+  assert.match(error("normal", { trustStart: 1.5 }), /「最初の信頼度 \(平均\)」は 1〜9 の整数/);
+  assert.match(error("normal", { trustStart: 10 }), /「最初の信頼度 \(平均\)」は 1〜9 の整数/);
+  assert.match(error("normal", { initiativeTrust: "3" }), /「歩み寄りに要る信頼度」は 1〜10 の整数/);
+  assert.match(error("normal", { understanding: "good" }), /「物わかり \(平均\)」は 1〜10 の整数/);
+  assert.match(error("normal", { understanding: 11 }), /「物わかり \(平均\)」は 1〜10 の整数/);
   assert.match(error("normal", { concerns: 3, openAtStart: 4 }), /「最初から話せる本音の数」は「懸念の数」以下/);
+  assert.match(error("normal", { nonNegotiable: 4 }), /「譲れない本音の数」は 0〜3 の整数/);
+});
+
+// ---- 本音の重要度 (要望の緩急) ------------------------------------------------------------
+
+/**
+ * ids の順に 1 ターンに 1 つずつ提案が当たって解消していき、最後は持ち帰って終える。
+ * 信頼度が要る本音 (村長の c4、渡し守の c2・c5) にも届くよう、最初に村長 6→7・渡し守 4→6 にしておく
+ */
+function endAfterResolving(ids: string[]) {
+  const quotes: Record<string, string> = { c1: Q1, c2: Q2, c3: Q3, c4: Q4, c5: Q5 };
+  const propose = (id: string) => ({ id, to: "proposed" as const, note: `${id} の案`, quote: quotes[id] });
+  const e = playing(BIG);
+  must(reply(e, { trust_changes: [{ character: "mayor", delta: 1 }, { character: "ferry", delta: 2 }], moods: [...calm, ...calmFerry], concern_updates: [propose(ids[0])] }));
+  ids.forEach((id, i) => {
+    const next = ids[i + 1];
+    e.act({ text: BIG }, !next);
+    must(e.reply({ turn: i + 2, lines: [line()], concern_updates: [{ id, to: "resolved", note: `${id} で合意` }, ...(next ? [propose(next)] : [])], epilogue: next ? undefined : "続きはまた今度。" }));
+  });
+  assert.equal(e.phase, "ended");
+  return e.publicState().ending!;
+}
+
+test("結末は重要度で決まる: 妥協案は、譲れない本音がすべて解消し、解消した重要度が合計の半分以上のとき", () => {
+  // 重要度は c1 9 (譲れない)・c2 7・c3 4・c4 6・c5 5 (合計 31)
+  // 数は 2/5 でも、重要な 2 つ (9 + 7 = 16) を解消すれば妥協案で合意
+  const two = endAfterResolving(["c1", "c2"]);
+  assert.deepEqual([two.type, two.resolved, two.importance, two.nonNegotiableLeft], ["compromise", 2, { resolved: 16, total: 31 }, 0]);
+  // 譲れない本音を解消しても、重要度が半分に届かなければ持ち帰り (9 + 4 = 13)
+  assert.equal(endAfterResolving(["c1", "c3"]).type, "carry_over");
+  // 4/5 を解消して重要度も半分以上 (22) でも、譲れない本音 (c1) が残ったら持ち帰り
+  const four = endAfterResolving(["c3", "c4", "c2", "c5"]);
+  assert.deepEqual([four.type, four.resolved, four.importance.resolved, four.nonNegotiableLeft], ["carry_over", 4, 22, 1]);
+});
+
+test("本音の重要度: ゲーム中は画面に送らない (終了後の答え合わせだけ) / AI に毎ターン渡る / 譲れない本音の数は難易度で決まる", () => {
+  const e = playing("村の予算はどのくらいですか？");
+  assert.deepEqual(work(e).digest.concerns.map((c) => [c.id, c.importance]), [["c1", 9], ["c2", 7], ["c3", 4], ["c4", 6], ["c5", 5]]);
+  must(reply(e, { concern_updates: [{ id: "c1", to: "revealed", asked: "村の予算" }] }));
+  // 見つかった本音でも、相手の思いの強さ (重要度) は見えない
+  assert.deepEqual(e.publicState().concerns.map((c) => [c.id, c.importance]), [["c1", undefined]]);
+  assert.ok(!JSON.stringify(e.publicState()).includes("importance"));
+  // 終了後は、見つけられなかった本音も含めて重要度が公開され、振り返りにも渡る
+  e.act({ text: "今日はここまでにします" }, true);
+  must(e.reply({ turn: 2, lines: [line()], epilogue: "また話そう。" }));
+  assert.deepEqual(e.publicState().concerns.map((c) => [c.id, c.importance]), [["c1", 9], ["c2", 7], ["c3", 4], ["c4", 6], ["c5", 5]]);
+  const review = e.pendingWork() as Extract<Work, { type: "review" }>;
+  assert.equal(review.concerns.find((c) => c.id === "c2")?.importance, 7);
+  assert.equal(review.ending.nonNegotiableLeft, 1);
+  assert.match(review.note, /重要度 \(importance\) の高い本音を優先できたか/);
+
+  // 譲れない本音 (9〜10) の数は難易度で決まる (普通 1・簡単 1・難しい 2)
+  assert.deepEqual([DIFFICULTY_PRESETS.easy.nonNegotiable, DIFFICULTY_PRESETS.normal.nonNegotiable, DIFFICULTY_PRESETS.hard.nonNegotiable], [1, 1, 2]);
+  const g = new Engine();
+  g.requestNewGame("");
+  const brief = (g.pendingWork() as Extract<Work, { type: "new_game" }>).difficulty;
+  assert.equal(brief.non_negotiable, 1);
+  assert.deepEqual(brief.importance_levels.map((l) => `${l.range} ${l.name}`), ["1〜2 譲ってもよい", "3〜4 できれば", "5〜6 大事", "7〜8 必ず達成したい", "9〜10 譲れない"]);
+  const withImportance = (values: number[]) => {
+    const s = scenario();
+    s.concerns = s.concerns.map((c, i) => ({ ...c, importance: values[i] }));
+    return errorsOf(g.startScenario(s));
+  };
+  assert.match(withImportance([9, 10, 4, 6, 5]), /これだけは譲れない本音 \(importance 9〜10\) をちょうど 1 個にしてください \(いま 2 個: c1, c2\)/);
+  assert.match(withImportance([8, 7, 4, 6, 5]), /ちょうど 1 個にしてください \(いま 0 個\)。残りの importance は 1〜8 にする/);
+  assert.match(withImportance([9, 5, 5, 5, 5]), /譲れない本音以外の重要度 \(importance\) が全部 5 です/);
+  assert.match(withImportance([9, 7, 4, 6, 11]), /concerns\.4\.importance/);
+  assert.equal(g.phase, "setup");
+  assert.equal(withImportance([10, 1, 3, 8, 5]), "");
+});
+
+// ---- 難易度: ランダム ------------------------------------------------------------------------
+
+/** 決まった順に値を返す乱数 (0 以上 1 未満)。尽きたら最後の値をくり返す */
+const sequence = (...values: number[]) => () => (values.length > 1 ? values.shift()! : values[0]);
+
+test("ランダム: 各パラメータを範囲の中から選ぶ (最初から話せる本音・譲れない本音は懸念の数まで)", () => {
+  const lows = randomParams(sequence(0));
+  const highs = randomParams(sequence(0.9999));
+  for (const key of Object.keys(PARAM_SPECS) as Array<keyof DifficultyParams>) {
+    assert.equal(lows[key], PARAM_SPECS[key].min, `${key} の最小`);
+    assert.equal(highs[key], PARAM_SPECS[key].max, `${key} の最大`);
+  }
+  // 懸念が 3 つなら、最初から話せる本音・譲れない本音も 3 つまで
+  const few = randomParams(sequence(0, 0.9999));
+  assert.deepEqual([few.concerns, few.openAtStart, few.nonNegotiable], [3, 3, 3]);
+  // 本物の乱数でも、いつも範囲内 (ブラウザから届いたパラメータと同じ検査を通る) で、値はばらつく
+  const draws = Array.from({ length: 300 }, () => randomParams());
+  for (const p of draws) assert.deepEqual(parseDifficulty("normal", p), { level: "normal", params: p });
+  assert.ok(new Set(draws.map((p) => p.concerns)).size >= 4);
+  assert.ok(new Set(draws.map((p) => p.understanding)).size >= 6);
+});
+
+test("ランダム: 始めるたびに決まり、AI に伝わる / 調整扱いにはならない / 何が選ばれたかは終了後にだけ見られる", () => {
+  // ブラウザから届いたパラメータは使わず、ここで決める
+  const parsed = parseDifficulty("random", { concerns: 99 });
+  assert.ok(!("error" in parsed), JSON.stringify(parsed));
+  assert.equal(parsed.level, "random");
+  assert.ok(parsed.params.concerns >= 3 && parsed.params.concerns <= 8);
+
+  const e = new Engine();
+  e.requestNewGame("", "random");
+  const brief = (e.pendingWork() as Extract<Work, { type: "new_game" }>).difficulty;
+  assert.deepEqual([brief.level, brief.label], ["random", "ランダム"]);
+  assert.equal(e.publicState().customized, false);
+  assert.equal(e.publicState().params, null);
+
+  // 選ばれた値 (ここでは普通と同じ値) に従ってシナリオを作れば始まる
+  const picked = { ...DIFFICULTY_PRESETS.normal };
+  const g = new Engine();
+  g.requestNewGame("", "random", picked);
+  assert.ok(g.startScenario(scenario()).ok);
+  assert.deepEqual([g.publicState().difficulty, g.publicState().customized, g.publicState().params], ["random", false, null]); // ゲーム中は見えない
+  g.act({ text: "今日はここまでにします" }, true);
+  assert.equal(work(g).difficulty, "ランダム");
+  must(g.reply({ turn: 1, lines: [line()], epilogue: "また話そう。" }));
+  assert.deepEqual(g.publicState().params, picked); // 終了後の答え合わせ
+  // 同じシナリオでやり直しても、同じ値のまま
+  assert.equal(g.replay(), null);
+  assert.equal(g.publicState().scenario!.turnLimit, 5 * 3 + 4);
 });
 
 // ---- 公開に向けた安全対策 -----------------------------------------------------------------
@@ -979,7 +1193,7 @@ test("まだ見つかっていない本音を台詞でほぼそのまま話し�
   const leak = line("mayor", "正直に言うと、村の蓄えが少なくて、大きな橋は作れないんじゃ。");
   const e = playing("村の予算はどのくらいですか？");
   assert.match(errorsOf(reply(e, { lines: [leak] })), /lines\[0\] に、まだ見つかっていない本音 "c1" がほぼそのまま出ています/);
-  assert.ok(reply(e, { lines: [leak], concern_updates: [{ id: "c1", to: "revealed" }] }).ok);
+  assert.ok(reply(e, { lines: [leak], concern_updates: [{ id: "c1", to: "revealed", asked: "村の予算" }] }).ok);
   // 一度見つかった本音は、何度話してもよい
   e.act({ text: "やはり予算ですね" });
   assert.ok(e.reply({ turn: 2, lines: [leak] }).ok);
@@ -998,5 +1212,48 @@ test("本音の漏れの判定: 間に字が入っただけの漏れは拾い、
   assert.ok(!leaksSecret("蓄えが心もとないからのう、立派な橋はちと無理じゃ", secret));
   assert.ok(!leaksSecret("村の蓄えのことは、また今度話そう", secret)); // 一部 (「村の蓄え」) だけでは漏れとみなさない
   assert.ok(leaksSecret("赤字です", "赤字")); // 4 文字以下の本音は、そのまま含まれていたら
+});
+
+// ---- しゃべりすぎを防ぐ ---------------------------------------------------------------------
+
+test("本音を話すのは、プレイヤーがその話題に触れたときだけ (きっかけの発言を引用させる)", () => {
+  const e = playing("こんにちは。今日はよろしくお願いします。");
+  // きっかけの引用が無い / 発言に無い (話題に触れていない) なら、本音は出せない
+  assert.match(errorsOf(reply(e, { concern_updates: [{ id: "c1", to: "revealed" }] })), /revealed にするには asked が必要/);
+  assert.match(errorsOf(reply(e, { concern_updates: [{ id: "c1", to: "revealed", asked: "予算はどのくらい" }] })), /asked がプレイヤーの今回の発言に見つかりません/);
+  assert.match(errorsOf(reply(e, { concern_updates: [{ id: "c1", to: "revealed", asked: "よろ" }] })), /4 文字以上/); // 短すぎる引用
+  assert.equal(e.publicState().concerns.length, 0);
+  // 話題に触れていれば出せる (空白の違いは無視)
+  const e2 = playing("村の予算は、どのくらいですか？");
+  assert.ok(reply(e2, { concern_updates: [{ id: "c1", to: "revealed", asked: "村の予算は、どの くらい" }] }).ok);
+  // 差し戻し (proposed → revealed) や、提案が当たったとき (hidden → proposed は quote で確かめる) には要らない
+  const e3 = playing(BIG);
+  assert.ok(reply(e3, { concern_updates: [{ id: "c1", to: "proposed", note: "小さな木橋", quote: Q1 }] }).ok);
+});
+
+test("しゃべりすぎの返答は差し戻す (台詞の長さ・数、しゃべる人数、地の文)", () => {
+  const long = "そうさのう。" + "あの橋のことは、わしも昔からずっと考えておってな。".repeat(5);
+  const cases: Array<[Partial<ReplyInput>, RegExp]> = [
+    [{ lines: [line("mayor", long)] }, /lines\[0\] の台詞が長すぎます \(\d+ 文字 > 120\)/],
+    [{ lines: [line("mayor", "あ".repeat(100)), line("ferry", "い".repeat(100)), line("mayor", "う".repeat(60))] }, /合計 260 文字 > 240/],
+    [{ lines: [line("mayor", "ふむ。"), line("ferry", "そうか。"), line("mayor", "続けよう。"), line("ferry", "ああ。")] }, /台詞は 1 回の返答で 3 つまで/],
+    [{ lines: [line("mayor", "ふむ。"), line("narrator", "日が傾いた。"), line("narrator", "風が吹いた。")] }, /地の文 \(narrator\) は 1 回の返答で 1 つまで/],
+    [{ lines: [line("narrator", "日が傾き、" + "川面が赤く染まってきた。".repeat(8))] }, /地の文が長すぎます/],
+  ];
+  for (const [r, expected] of cases) {
+    const e = playing("橋のことを聞かせてください。");
+    assert.match(errorsOf(reply(e, r)), expected);
+    assert.equal(e.phase, "ai_turn");
+  }
+  // 3 人目がしゃべったら多すぎる
+  const three = new Engine();
+  three.requestNewGame("");
+  const sc = scenario();
+  sc.characters.push({ ...sc.characters[1], id: "smith", name: "鍛冶屋", emoji: "⚒️" });
+  assert.ok(three.startScenario(sc).ok);
+  three.act({ text: "皆さんのご意見を聞かせてください。" });
+  assert.match(errorsOf(three.reply({ turn: 1, lines: [line("mayor", "ふむ。"), line("ferry", "おれは反対だ。"), line("smith", "わしは賛成だ。")] })), /しゃべるのは 2 人までです \(今回 3 人\)/);
+  // 上限の内側なら通る
+  assert.ok(reply(playing(), { lines: [line("mayor", "あ".repeat(120)), line("ferry", "い".repeat(120)), line("narrator", "日が傾いた。")] }).ok);
 });
 
