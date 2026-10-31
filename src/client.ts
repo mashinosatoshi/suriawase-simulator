@@ -170,6 +170,13 @@ function concernCard(s: PublicState, c: PublicConcern, withAgreement = false, ad
 }
 
 // ---- 入力欄 -------------------------------------------------------------------------
+/**
+ * 指で操作する端末 (スマホ・タブレット)。画面のキーボードには Shift が無く「Shift+Enter で改行」ができないので、
+ * Enter は改行にして、送信は送信ボタンで行う
+ */
+const TOUCH = matchMedia("(pointer: coarse)").matches;
+if (TOUCH) $("text").setAttribute("enterkeyhint", "enter");
+
 function updateComposer() {
   const s = state;
   const can = s?.phase === "player_turn";
@@ -183,7 +190,9 @@ function updateComposer() {
       ? "相手が考えています…"
       : s.phase === "ended"
         ? "対話は終了しました"
-        : "ここに入力 (Enter で送信 / Shift+Enter で改行)";
+        : TOUCH
+          ? "ここに入力"
+          : "ここに入力 (Enter で送信 / Shift+Enter で改行)";
   const to = $<HTMLSelectElement>("to");
   const cast = s?.scenario?.characters ?? [];
   const prev = to.value;
@@ -212,8 +221,8 @@ $("defer").addEventListener("click", async () => {
 });
 $("text").addEventListener("keydown", (e) => {
   const ke = e as KeyboardEvent;
-  // 日本語 IME の変換確定 Enter では送信しない
-  if (ke.key === "Enter" && !ke.shiftKey && !ke.isComposing && ke.keyCode !== 229) {
+  // 日本語 IME の変換確定 Enter では送信しない。指で操作する端末では Enter は改行のまま
+  if (!TOUCH && ke.key === "Enter" && !ke.shiftKey && !ke.isComposing && ke.keyCode !== 229) {
     ke.preventDefault();
     $<HTMLFormElement>("composer").requestSubmit();
   }
@@ -708,7 +717,8 @@ function renderPremise(s: PublicState) {
     el.append(
       h(
         "details",
-        { class: "briefing", open: true },
+        // スマホでは会話欄を広く使うため、最初は閉じておく (「前提」を押せば開く)
+        { class: "briefing", open: !matchMedia("(max-width: 860px)").matches },
         h("summary", {}, "前提 (あなたが知っていること)"),
         h("dl", {}, ...facts.flatMap((f) => [h("dt", {}, f.label), h("dd", {}, f.text)])),
       ),
