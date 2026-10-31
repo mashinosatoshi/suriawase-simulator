@@ -12,6 +12,7 @@ export const MAX_LEVEL = 10;
 /** 1〜10 を 2 段階ずつ 5 つに分けた呼び名 (パラメータ欄と AI への説明で使う) */
 export const TRUST_LEVEL_NAMES = ["険悪", "警戒", "様子見", "好意的", "信頼"] as const;
 export const UNDERSTANDING_LEVEL_NAMES = ["とても悪い", "悪い", "ふつう", "よい", "とてもよい"] as const;
+export const OPENNESS_LEVEL_NAMES = ["とても頑な", "頑な", "ふつう", "打ち解けやすい", "すぐ心を開く"] as const;
 /** 本音の重要度 (1〜10) の呼び名。要望の緩急 */
 export const IMPORTANCE_LEVEL_NAMES = ["譲ってもよい", "できれば", "大事", "必ず達成したい", "譲れない"] as const;
 /** この重要度以上の本音は「これだけは譲れない」。1 つでも解消できないと、合意にはならない (持ち帰り) */
@@ -131,9 +132,9 @@ export const DEFAULT_DIFFICULTY: Difficulty = "random";
 
 /** 開始画面に出す説明 */
 export const DIFFICULTY_INFO: Record<Difficulty, { label: string; summary: string }> = {
-  easy: { label: "簡単", summary: "相手は最初から好意的で、こちらの言いたいことを汲み取ってくれる。抱えている本音は少なめ。" },
+  easy: { label: "簡単", summary: "相手は最初から好意的で打ち解けやすく、こちらの言いたいことを汲み取ってくれる。抱えている本音は少なめ。" },
   normal: { label: "普通", summary: "相手は様子見から始まる。話を重ねれば、相手から歩み寄ってくれることもある。" },
-  hard: { label: "難しい", summary: "相手は最初から不信感を持ち、はっきり言わないと伝わらない。抱えている本音も多く、時間の余裕も少ない。" },
+  hard: { label: "難しい", summary: "相手は最初から不信感を持ち、なかなか打ち解けない。はっきり言わないと伝わらず、抱えている本音も多く、時間の余裕も少ない。" },
   random: { label: "ランダム", summary: "パラメータ (本音の数・相手の打ち解けやすさや物わかり・ターン数など) を毎回ランダムに決める。どんな相手かは、話してみるまで分からない。何が選ばれたかは、終わった後に見られる。" },
 };
 
@@ -146,6 +147,8 @@ export interface DifficultyParams {
   nonNegotiable: number;
   /** 登場人物の最初の信頼度の平均 (1 = 険悪 〜 10 = 信頼)。各キャラの値は人柄に合わせてばらつく。冒頭の口調と気分もこれに合わせる */
   trustStart: number;
+  /** 登場人物の打ち解けやすさの平均 (1 = とても頑な 〜 10 = すぐ心を開く): 良い発言で信頼度が上がる速さ */
+  openness: number;
   /** ターン数の上限 = 懸念の数 × これ + TURN_BASE */
   turnsPerConcern: number;
   /** 登場人物の物わかりの平均 (1〜10): 提案をどこまで汲み取るか・解消の判定の厳しさ (AI への指示で決まる) */
@@ -159,9 +162,9 @@ export interface DifficultyParams {
 }
 
 export const DIFFICULTY_PRESETS: Record<PresetDifficulty, DifficultyParams> = {
-  easy: { concerns: 4, openAtStart: 2, nonNegotiable: 1, trustStart: 7, turnsPerConcern: 4, understanding: 8, initiativeTurns: 1, initiativeTrust: 5, initiativeCooldown: 1 },
-  normal: { concerns: 5, openAtStart: 2, nonNegotiable: 1, trustStart: 5, turnsPerConcern: 3, understanding: 5, initiativeTurns: 2, initiativeTrust: 7, initiativeCooldown: 2 },
-  hard: { concerns: 7, openAtStart: 1, nonNegotiable: 2, trustStart: 2, turnsPerConcern: 2, understanding: 2, initiativeTurns: 3, initiativeTrust: 8, initiativeCooldown: 3 },
+  easy: { concerns: 4, openAtStart: 2, nonNegotiable: 1, trustStart: 7, openness: 8, turnsPerConcern: 4, understanding: 8, initiativeTurns: 1, initiativeTrust: 5, initiativeCooldown: 1 },
+  normal: { concerns: 5, openAtStart: 2, nonNegotiable: 1, trustStart: 5, openness: 5, turnsPerConcern: 3, understanding: 5, initiativeTurns: 2, initiativeTrust: 7, initiativeCooldown: 2 },
+  hard: { concerns: 7, openAtStart: 1, nonNegotiable: 2, trustStart: 2, openness: 3, turnsPerConcern: 2, understanding: 2, initiativeTurns: 3, initiativeTrust: 8, initiativeCooldown: 3 },
 };
 
 export const TURN_BASE = 4;
@@ -173,6 +176,7 @@ export const PARAM_SPECS: Record<keyof DifficultyParams, { label: string; min: n
   openAtStart: { label: "最初から話せる本音の数", min: 1, max: 8, help: "打ち解けていなくても話してくれる本音の数。残りは信頼関係ができるまで話さない" },
   nonNegotiable: { label: "譲れない本音の数", min: 0, max: 3, help: "重要度 9〜10 (これだけは譲れない) の本音の数。1 つでも解消できないと、合意にはならず持ち帰りになる。残りの本音の重要度は 1〜8 で緩急がつく" },
   trustStart: { label: "最初の信頼度 (平均)", min: MIN_LEVEL, max: MAX_LEVEL - 1, help: "1〜10 (1〜2 険悪 / 3〜4 警戒 / 5〜6 様子見 / 7〜8 好意的 / 9〜10 信頼)。登場人物ごとに人柄に合わせてばらつき、その平均がこの値になる。冒頭の口調と気分もこれに合わせる" },
+  openness: { label: "打ち解けやすさ (平均)", min: MIN_LEVEL, max: MAX_LEVEL, help: "1 = とても頑な 〜 10 = すぐ心を開く。良い発言で信頼度が上がる速さ (頑な人ほど、良いやり取りを何度も重ねないと打ち解けない。下がるときは変わらない)。登場人物ごとにばらつき、その平均がこの値になる" },
   understanding: { label: "物わかり (平均)", min: MIN_LEVEL, max: MAX_LEVEL, help: "1 = 字面どおりにしか受け取らない 〜 10 = 言いたいことを汲み取ってくれる。提案をどこまで汲み取るか、解消の判定の厳しさ。登場人物ごとにばらつき、その平均がこの値になる" },
   turnsPerConcern: { label: "懸念 1 つあたりのターン数", min: 2, max: 5, help: `ターン数の上限 = 懸念の数 × これ + ${TURN_BASE}` },
   initiativeTurns: { label: "歩み寄りに要るターン数", min: 1, max: 4, help: "本音が見えた後、何ターンその話に向き合えば、相手から歩み寄ってくれるか" },

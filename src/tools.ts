@@ -31,7 +31,7 @@ export const GAME_TOOLS: GameTool[] = [
 - 舞台は自由 (現実の仕事・家族・地域から、ファンタジー・SF まで)。プレイヤーの request があれば従う。
 - 課題は「どちらかが勝つ」ものではなく、双方の事情を理解して落としどころを見つけるもの。
 - 難易度 (仕事の difficulty) に従う。懸念はちょうど difficulty.concerns 個。
-- 各キャラに trust_start (最初の信頼度) と understanding (物わかり) を 1〜10 で付ける。persona (人柄) に合わせて人ごとに差をつけ、全員の平均を difficulty.trust_start / difficulty.understanding ±1 に収める。
+- 各キャラに trust_start (最初の信頼度)・openness (打ち解けやすさ)・understanding (物わかり) を 1〜10 で付ける。persona (人柄) に合わせて人ごとに差をつけ、全員の平均を difficulty.trust_start / difficulty.openness / difficulty.understanding ±1 に収める。
 - 各懸念に importance (owner にとっての重要度 1〜10) を付ける。9〜10 (これだけは譲れない) はちょうど difficulty.non_negotiable 個。残りは 1〜8 で緩急をつける。
 - 最初から話せる本音 (min_trust が owner の trust_start 以下) はちょうど difficulty.open_at_start 個にし、残りは owner の trust_start より上でばらつかせる。opening の口調と opening_moods は、各キャラの trust_start の段階 (difficulty.trust_levels) に合わせる。ターン数の上限 (difficulty.turns) はエンジンが設定する。
 - 懸念は表向きの要望の裏にある本音で、互いに少しトレードオフになると面白い。どの本音を最初から話せるものにするかは、物語として自然なものを選ぶ (表向きの要望に近いものほど話しやすい)。
