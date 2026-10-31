@@ -1,0 +1,13 @@
+# セキュリティヘッダーの定義。公開用のサーバー (Cloud Run のコンテナ。src/static.ts) とローカル用のサーバー (src/server.ts) がこれを読んで送る。
+# Cloudflare Pages / Netlify と同じ書式なので、そちらに置いた場合もそのまま効く。
+# CSP: スクリプトとスタイルはこのサイトのものだけ。通信先はこのサイトと、3 社の AI の API だけ (API キーはブラウザから各社へ直接送る)。
+# index.html の <meta http-equiv="Content-Security-Policy"> にも同じ内容を書いている (frame-ancestors は meta では効かないので、ここだけ)。
+/*
+  Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' https://api.anthropic.com https://api.openai.com https://generativelanguage.googleapis.com; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
+  X-Frame-Options: DENY
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: no-referrer
+  Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=()
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Resource-Policy: same-origin
+  Strict-Transport-Security: max-age=63072000; includeSubDomains

@@ -1,0 +1,5 @@
+node_modules/
+public/client.js
+public/client.js.map
+.env
+dist/

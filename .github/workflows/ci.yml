@@ -1,0 +1,40 @@
+# push と pull request のたびに、型チェック・テスト・結合テスト・公開用コンテナのビルドを確かめる
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run smoke
+      - run: npm run build:client
+      - run: npm run build:serve
+
+  container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t suriawase-simulator:ci .
+      # 起動して、セキュリティヘッダー付きで画面が返ることを確かめる
+      - run: |
+          docker run -d --rm -p 8080:8080 --name app suriawase-simulator:ci
+          for i in $(seq 1 30); do curl -sf http://localhost:8080/ > /dev/null && break; sleep 1; done
+          curl -sfI http://localhost:8080/ | tee headers.txt
+          grep -i "content-security-policy: .*frame-ancestors 'none'" headers.txt
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/_headers)" = 404
+          docker stop app

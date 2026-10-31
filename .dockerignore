@@ -1,0 +1,12 @@
+# コンテナのビルドに要るのは package*.json と src/ と public/ だけ
+node_modules
+dist
+.git
+.github
+.env*
+.mcp.json
+scripts
+*.md
+LICENSE
+public/client.js
+public/client.js.map

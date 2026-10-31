@@ -1,0 +1,4 @@
+# 改行は LF にそろえる (Windows で編集しても、CI やコンテナ (Linux) と同じ形でコミットされる)
+* text=auto eol=lf
+*.png binary
+*.ico binary

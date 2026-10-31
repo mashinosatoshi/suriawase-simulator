@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>すり合わせシミュレーター</title>
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' https://api.anthropic.com https://api.openai.com https://generativelanguage.googleapis.com; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header>
+  <h1>🤝 すり合わせシミュレーター</h1>
+  <span id="title"></span>
+  <span id="ai" class="chip off">AI: 未接続</span>
+  <span class="spacer"></span>
+  <button id="showending" hidden>結果・振り返り</button>
+  <button id="replay" disabled>最初から</button>
+  <button id="newgame">新しいシナリオ</button>
+</header>
+
+<main>
+  <section id="chatpane">
+    <div id="premise"></div>
+    <div id="chat" aria-live="polite"></div>
+    <div id="aierror" hidden></div>
+    <form id="composer">
+      <div class="row">
+        <select id="to" aria-label="宛先" hidden></select>
+        <textarea id="text" rows="2" maxlength="500" placeholder="ここに入力 (Enter で送信 / Shift+Enter で改行)"></textarea>
+        <button class="primary" id="send">送信</button>
+      </div>
+      <div class="row2">
+        <span id="hint">質問・共感・提案など、自由に話しかけてください。具体的な案を出すと、相手が検討してくれます。</span>
+        <button type="button" id="defer">持ち帰って終える</button>
+      </div>
+    </form>
+  </section>
+
+  <aside>
+    <div class="card"><h2>🎯 目標</h2><div id="goal"></div></div>
+    <div class="card">
+      <h2>⏳ 残りターン <span id="turns" class="muted"></span></h2>
+      <div class="bar"><div id="turnbar"></div></div>
+    </div>
+    <div class="card"><h2>👥 登場人物</h2><div class="cast" id="cast"></div></div>
+    <div class="card"><h2>📋 懸念ボード</h2><div id="board"></div></div>
+  </aside>
+</main>
+
+<footer class="sitefoot">
+  <a href="/privacy.html" target="_blank" rel="noopener noreferrer">プライバシーポリシー</a> ・
+  <a href="/terms.html" target="_blank" rel="noopener noreferrer">利用規約</a> ・
+  <a href="https://github.com/mashinosatoshi/suriawase-simulator" target="_blank" rel="noopener noreferrer">ソースコード (GitHub)</a> ・
+  <a href="https://github.com/mashinosatoshi/suriawase-simulator/issues" target="_blank" rel="noopener noreferrer">お問い合わせ</a>
+</footer>
+
+<div id="setup" class="overlay" hidden></div>
+<div id="ending" class="overlay" hidden></div>
+<div id="toast" hidden></div>
+<script src="/client.js"></script>
+</body>
+</html>
