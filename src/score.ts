@@ -20,9 +20,10 @@ const RANKS: Array<[ScoreRank, number]> = [
 
 /**
  * 引き出しの難しさ (%): 打ち解けるまで話してくれない本音ほど高い。
- * 持ち主の最初の信頼度から、本音を話し始める信頼度までの差 1 つにつき +25% (最初から話せる本音は 100%)
+ * 持ち主の最初の信頼度から、本音を話し始める信頼度までの差 1 つにつき +25% (最初から話せる本音は 100%)。
+ * 持ち主が打ち解けにくいほど 1 段の重みが増える (打ち解けやすさが 10 から 1 下がるごとに +2%。最も頑な人で +43%)
  */
-export const discoverRate = (minTrust: number, trustStart: number) => 100 + Math.max(0, minTrust - trustStart) * 25;
+export const discoverRate = (minTrust: number, trustStart: number, openness: number) => 100 + Math.max(0, minTrust - trustStart) * (25 + (MAX_LEVEL - openness) * 2);
 
 /**
  * 解決の難しさ (%): 物わかりが悪く、最初から信頼されていない相手ほど高い。
@@ -36,7 +37,7 @@ const points = (importance: number, per: number, rate: number) => Math.round((im
 export function scoreGame(s: Scenario, statuses: ConcernStatus[]): GameScore {
   const items = s.concerns.map((c, i) => {
     const owner = s.characters.find((ch) => ch.id === c.owner)!;
-    const dRate = discoverRate(c.min_trust, owner.trust_start);
+    const dRate = discoverRate(c.min_trust, owner.trust_start, owner.openness);
     const rRate = resolveRate(owner.understanding, owner.trust_start);
     const discoverMax = points(c.importance, DISCOVER_POINTS, dRate);
     const resolveMax = points(c.importance, RESOLVE_POINTS, rRate);

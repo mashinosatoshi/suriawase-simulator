@@ -27,6 +27,12 @@ export const characterSchema = z.object({
     .min(MIN_LEVEL)
     .max(MAX_LEVEL - 1)
     .describe("【AI専用】このキャラの、プレイヤーへの最初の信頼度 (1〜9。1 = 険悪 〜 10 = 信頼。difficulty.trust_levels を参照)。全員の平均を difficulty.trust_start ±1 に収め、persona に合わせて人ごとに差をつける"),
+  openness: z
+    .number()
+    .int()
+    .min(MIN_LEVEL)
+    .max(MAX_LEVEL)
+    .describe("【AI専用】このキャラの打ち解けやすさ (1 = とても頑な 〜 10 = すぐ心を開く。difficulty.openness_levels を参照)。良い発言で信頼度が上がる速さで、エンジンが上がり幅を縮める。全員の平均を difficulty.openness ±1 に収め、persona と矛盾しない値にする"),
   understanding: z
     .number()
     .int()
@@ -224,6 +230,7 @@ export function checkScenario(s: Scenario, d: DifficultyBrief): string[] {
   // 信頼度と物わかりは登場人物ごと。平均が難易度の値に近く、2 人以上なら人柄に合わせて差がある
   const levels: Array<[string, (c: Scenario["characters"][number]) => number, number]> = [
     ["最初の信頼度 (trust_start)", (c) => c.trust_start, d.trust_start],
+    ["打ち解けやすさ (openness)", (c) => c.openness, d.openness],
     ["物わかり (understanding)", (c) => c.understanding, d.understanding],
   ];
   for (const [name, of, target] of levels) {
@@ -267,14 +274,21 @@ export const replyShape = {
     .array(
       z.object({
         character: z.string().describe("キャラクター id"),
-        delta: z.number().int().min(-MAX_TRUST_STEP).max(MAX_TRUST_STEP).describe("信頼度の増減 (1 人 1 ターンに ±2 まで)。+1 がふつう、+2 はその人の気持ちや事情を的確に汲んだとき"),
+        delta: z
+          .number()
+          .int()
+          .min(-MAX_TRUST_STEP)
+          .max(MAX_TRUST_STEP)
+          .describe(
+            "発言の良さの評価 (1 人 1 ターンに ±2 まで)。+1 がふつう、+2 はその人の気持ちや事情を的確に汲んだ、特に響いた発言のときだけ (乱発しない)。上がるときの実際の量は、その人の打ち解けやすさでエンジンが縮める。下がるときはそのまま",
+          ),
         reason: z.string().max(80).optional().describe("動かした理由 (プレイヤーには表示されない。get_state で振り返るための記録)"),
       }),
     )
     .max(4)
     .optional()
     .describe(
-      "信頼度 (キャラクターごと、1〜10) の増減。動かす人だけ書く。先に適用され、その後の owner の信頼度で本音の解禁を判定する。信頼度はプレイヤーには見えないので、変化は口調と、その人の moods で表現する",
+      "信頼度 (キャラクターごと、1〜10。小数で積み上がり、判定には整数部分を使う) の増減。動かす人だけ書く。先に適用され、その後の owner の信頼度で本音の解禁を判定する。信頼度はプレイヤーには見えないので、整数部分が変わったら、口調と、その人の moods で表現する",
     ),
   concern_updates: z
     .array(

@@ -18,6 +18,7 @@ const scenario = {
       role: "村長",
       persona: "慎重で面倒見がよい。決めつけられるのを嫌う。",
       trust_start: 5,
+      openness: 5,
       understanding: 5,
       speech: "一人称は「わし」、相手は「あんた」。老人らしいくだけた口調。",
       sample_lines: ["そうさのう、費用のことは気になるわい。", "あんたの話は、よう分かった。"],

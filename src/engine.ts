@@ -1,4 +1,4 @@
-import { defaultParams, difficultyBrief, difficultyLabel, isCustomized, trustName, understandingNote, type DifficultyBrief } from "./difficulty.js";
+import { defaultParams, difficultyBrief, difficultyLabel, isCustomized, opennessNote, trustGainRate, trustName, understandingNote, type DifficultyBrief } from "./difficulty.js";
 import {
   DIFFICULTY_PRESETS,
   MAX_LEVEL,
@@ -136,7 +136,7 @@ export type Work =
         agreement?: string;
       }>;
       /** 登場人物ごとの信頼度 (最初と最後) と物わかり */
-      characters: Array<{ id: string; name: string; trust_start: number; trust_end: number; understanding: number }>;
+      characters: Array<{ id: string; name: string; trust_start: number; trust_end: number; openness: number; understanding: number }>;
       trust_history: TrustChange[];
     };
 
@@ -150,10 +150,10 @@ interface TrustChange {
 
 export interface Digest {
   /**
-   * 登場人物ごとの、いまの信頼度 (1〜10) と物わかり (1〜10)。本音を話すか・歩み寄るかは、その本音を持つ人 (owner) の信頼度で決まる。
+   * 登場人物ごとの、いまの信頼度 (1〜10、小数。判定には整数部分を使う)・打ち解けやすさ・物わかり (1〜10)。本音を話すか・歩み寄るかは、その本音を持つ人 (owner) の信頼度で決まる。
    * 提案をどこまで汲み取るか・解消の判定の厳しさは、owner の物わかりに合わせる
    */
-  characters: Array<{ id: string; trust: number; trust_level: string; understanding: number; understanding_note: string }>;
+  characters: Array<{ id: string; trust: number; trust_level: string; openness: number; openness_note: string; understanding: number; understanding_note: string }>;
   /** 相手からの歩み寄りを、直近の発言で続けて使っていないか */
   initiative_cooldown_ok: boolean;
   /** 歩み寄りの根拠に要る、本音が見えた後の別々のターンの数 (evidence の引用もこの数以上) */
@@ -176,6 +176,12 @@ export type Result<T extends object = object> = ({ ok: true } & T) | { ok: false
 const fail = (...errors: string[]): { ok: false; errors: string[] } => ({ ok: false, errors });
 
 const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n));
+/**
+ * 信頼度は 100 倍の整数で持つ (打ち解けやすさで縮めた上がり幅を、小数のまま積み上げるため)。
+ * 本音の解禁・歩み寄りの判定と、気分の更新が要るかどうかは、整数部分 (段階) で決める
+ */
+const levelOf = (pts: number) => Math.floor(pts / 100);
+const trustValue = (pts: number) => pts / 100;
 
 export class Engine {
   phase: Phase = "setup";
@@ -190,8 +196,8 @@ export class Engine {
   private turnLimit = turnLimitOf(DIFFICULTY_PRESETS.normal);
   private scenario: Scenario | null = null;
   private turn = 0;
-  /** キャラクターごとの信頼度 (1〜10)。プレイヤーには見せない */
-  private trust = new Map<string, number>();
+  /** キャラクターごとの信頼度 (1〜10) の 100 倍 (levelOf)。プレイヤーには見せない */
+  private trustPts = new Map<string, number>();
   private trustHistory: TrustChange[] = [];
   private concerns: ConcernRuntime[] = [];
   private concernSeq = 0;
@@ -256,7 +262,7 @@ export class Engine {
   private resetRuntime() {
     this.epoch++;
     this.turn = 0;
-    this.trust = new Map();
+    this.trustPts = new Map();
     this.trustHistory = [];
     this.concerns = [];
     this.concernSeq = 0;
@@ -278,7 +284,7 @@ export class Engine {
     this.turnLimit = turnLimitOf(this.params);
     this.concerns = s.concerns.map(() => ({ status: "hidden" as const }));
     for (const c of s.characters) {
-      this.trust.set(c.id, c.trust_start);
+      this.trustPts.set(c.id, c.trust_start * 100);
       this.moods.set(c.id, { ...NEUTRAL_MOOD });
     }
     for (const m of s.opening_moods ?? []) this.moods.set(m.character, { emoji: m.emoji, label: m.label });
@@ -367,12 +373,14 @@ export class Engine {
       if (hit) errors.push(steeringMessage(`moods (${m.character}) の label`, hit));
     }
 
-    // 信頼度 (キャラクターごと) は先に適用し、その値で本音の解禁を判定する
-    const trustAfter = new Map(this.trust);
+    // 信頼度 (キャラクターごと) は先に適用し、その値で本音の解禁を判定する。
+    // 上がるときは、AI の評価 (+1 / +2) を、その人の打ち解けやすさで縮める (頑な人は、良い発言を重ねないと打ち解けない)。下がるときはそのまま
+    const trustAfter = new Map(this.trustPts);
     const trustSeen = new Set<string>();
     for (const t of r.trust_changes ?? []) {
-      const now = this.trust.get(t.character);
-      if (now === undefined) {
+      const now = this.trustPts.get(t.character);
+      const who = s.characters.find((c) => c.id === t.character);
+      if (now === undefined || !who) {
         errors.push(`trust_changes: キャラクター "${t.character}" は存在しません`);
         continue;
       }
@@ -381,12 +389,16 @@ export class Engine {
         continue;
       }
       trustSeen.add(t.character);
-      trustAfter.set(t.character, clamp(now + t.delta, MIN_LEVEL, MAX_LEVEL));
+      const change = t.delta > 0 ? t.delta * trustGainRate(who.openness) : t.delta * 100;
+      trustAfter.set(t.character, clamp(now + change, MIN_LEVEL * 100, MAX_LEVEL * 100));
     }
-    // 信頼度は画面に出ないので、動いた人の気分の更新が唯一の手がかりになる
+    // 信頼度は画面に出ないので、段階 (整数部分) が変わった人の気分の更新が唯一の手がかりになる
     const moodOf = new Set((r.moods ?? []).map((m) => m.character));
     for (const [id, v] of trustAfter) {
-      if (v !== this.trust.get(id) && !moodOf.has(id)) errors.push(`"${id}" の信頼度が動くターンは、その人の moods も更新してください (プレイヤーに見える唯一の手がかりです。口調の変化も lines に込めてください)`);
+      const before = levelOf(this.trustPts.get(id)!);
+      if (levelOf(v) !== before && !moodOf.has(id)) {
+        errors.push(`"${id}" の信頼度が ${before} → ${levelOf(v)} に変わるターンは、その人の moods も更新してください (プレイヤーに見える唯一の手がかりです。口調の変化も lines に込めてください)`);
+      }
     }
 
     const planned: Array<{ index: number; from: ConcernStatus; to: ConcernStatus; note: string; by: "player" | "character" }> = [];
@@ -415,7 +427,7 @@ export class Engine {
         continue;
       }
       // 本音を話すか・歩み寄るかは、その本音を持つ人の信頼度で決まる
-      const ownerTrust = trustAfter.get(c.owner) ?? MIN_LEVEL;
+      const ownerTrust = levelOf(trustAfter.get(c.owner) ?? MIN_LEVEL * 100);
       if (from === "hidden" && ownerTrust < c.min_trust) {
         errors.push(`懸念 "${u.id}" は、まだ ${c.owner} が本音を話せるほど信頼されていません (${c.owner} の信頼度 ${ownerTrust} < 必要 ${c.min_trust})。本音は出さず、信頼度が上がる聞き方を待ってください`);
         continue;
@@ -510,11 +522,11 @@ export class Engine {
     for (const m of r.moods ?? []) this.moods.set(m.character, { emoji: m.emoji, label: m.label });
 
     for (const [id, to] of trustAfter) {
-      const from = this.trust.get(id)!;
+      const from = this.trustPts.get(id)!;
       if (to === from) continue;
       // プレイヤーには見せない。AI が get_state で振り返れるように記録だけしておく
-      this.trustHistory.push({ turn: this.turn, character: id, from, to, reason: r.trust_changes?.find((t) => t.character === id)?.reason ?? "" });
-      this.trust.set(id, to);
+      this.trustHistory.push({ turn: this.turn, character: id, from: trustValue(from), to: trustValue(to), reason: r.trust_changes?.find((t) => t.character === id)?.reason ?? "" });
+      this.trustPts.set(id, to);
     }
 
     // 進行の要約はチャットには出さない (現実の対話では見えないため)。懸念ボードの状態だけが変わる
@@ -545,7 +557,7 @@ export class Engine {
       ok: true,
       summary: reason
         ? `対話が終了しました (${this.ending!.type}, 解消 ${resolved}/${this.concerns.length})。続けて振り返りの依頼 (type=review) が届きます`
-        : `ok。残りターン ${this.turnLimit - this.turn}、信頼度 ${[...this.trust].map(([id, v]) => `${id} ${v}`).join(" / ")}、解消 ${resolved}/${this.concerns.length}`,
+        : `ok。残りターン ${this.turnLimit - this.turn}、信頼度 ${[...this.trustPts].map(([id, v]) => `${id} ${trustValue(v)}`).join(" / ")}、解消 ${resolved}/${this.concerns.length}`,
     };
   }
 
@@ -647,8 +659,16 @@ export class Engine {
     const s = this.scenario!;
     return {
       characters: s.characters.map((c) => {
-        const trust = this.trust.get(c.id)!;
-        return { id: c.id, trust, trust_level: trustName(trust), understanding: c.understanding, understanding_note: understandingNote(c.understanding) };
+        const pts = this.trustPts.get(c.id)!;
+        return {
+          id: c.id,
+          trust: trustValue(pts),
+          trust_level: trustName(levelOf(pts)),
+          openness: c.openness,
+          openness_note: opennessNote(c.openness),
+          understanding: c.understanding,
+          understanding_note: understandingNote(c.understanding),
+        };
       }),
       initiative_cooldown_ok: this.initiativeCooldownOk(),
       initiative_min_turns: this.params.initiativeTurns,
@@ -718,7 +738,7 @@ export class Engine {
           proposed_by: this.concerns[i].proposedBy,
           agreement: this.concerns[i].agreement,
         })),
-        characters: s.characters.map((c) => ({ id: c.id, name: c.name, trust_start: c.trust_start, trust_end: this.trust.get(c.id)!, understanding: c.understanding })),
+        characters: s.characters.map((c) => ({ id: c.id, name: c.name, trust_start: c.trust_start, trust_end: trustValue(this.trustPts.get(c.id)!), openness: c.openness, understanding: c.understanding })),
         trust_history: this.trustHistory,
       };
     }
@@ -753,7 +773,7 @@ export class Engine {
       params: this.params,
       turn_limit: this.turnLimit,
       turn: this.turn,
-      trust: Object.fromEntries(this.trust),
+      trust: Object.fromEntries([...this.trustPts].map(([id, v]) => [id, trustValue(v)])),
       trust_history: this.trustHistory.slice(-8),
       scenario: s,
       concerns: s?.concerns.map((c, i) => ({

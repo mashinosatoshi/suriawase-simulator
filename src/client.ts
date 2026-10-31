@@ -8,6 +8,7 @@ import {
   IMPORTANCE_LEVEL_NAMES,
   levelBand,
   NON_NEGOTIABLE,
+  OPENNESS_LEVEL_NAMES,
   PARAM_SPECS,
   sameParams,
   TRUST_LEVEL_NAMES,
@@ -577,11 +578,11 @@ function difficultyPicker(initial: Difficulty, onPick: (d: Difficulty) => void) 
 const range = (min: number, max: number) => Array.from({ length: max - min + 1 }, (_, i) => min + i);
 const PARAM_GROUPS: Array<[string, Array<keyof DifficultyParams>]> = [
   ["シナリオ", ["concerns", "openAtStart", "nonNegotiable", "turnsPerConcern"]],
-  ["相手 (登場人物の平均)", ["trustStart", "understanding"]],
+  ["相手 (登場人物の平均)", ["trustStart", "openness", "understanding"]],
   ["相手からの歩み寄り", ["initiativeTurns", "initiativeTrust", "initiativeCooldown"]],
 ];
 /** 1〜10 の段階で表すパラメータは、選択肢に呼び名を添える (例: 5 (様子見)) */
-const LEVEL_NAMES: Partial<Record<keyof DifficultyParams, readonly string[]>> = { trustStart: TRUST_LEVEL_NAMES, understanding: UNDERSTANDING_LEVEL_NAMES, initiativeTrust: TRUST_LEVEL_NAMES };
+const LEVEL_NAMES: Partial<Record<keyof DifficultyParams, readonly string[]>> = { trustStart: TRUST_LEVEL_NAMES, openness: OPENNESS_LEVEL_NAMES, understanding: UNDERSTANDING_LEVEL_NAMES, initiativeTrust: TRUST_LEVEL_NAMES };
 const paramText = (key: keyof DifficultyParams, v: number) => (LEVEL_NAMES[key] ? `${v} (${LEVEL_NAMES[key][levelBand(v)]})` : String(v));
 
 /**

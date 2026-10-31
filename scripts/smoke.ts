@@ -65,7 +65,8 @@ const scenario = {
       emoji: "📚",
       role: "書店主",
       persona: "穏やかだが頑固。本への愛着が強く、人の話を最後まで聞く。",
-      trust_start: 5,
+      trust_start: 6,
+      openness: 5,
       understanding: 5,
       speech: "一人称は「私」、相手は「君」。穏やかな常体で、語尾は「〜だね」「〜かな」。",
       sample_lines: ["そうだね、最近は本が売れなくてね。", "君は昔から、よく店に来てくれたな。"],
@@ -75,7 +76,7 @@ const scenario = {
     { id: "c1", owner: "owner", category: "お金", text: "毎月の赤字がもう限界に近い", importance: 9, reveal_hint: "売上や家計を気遣う", min_trust: 1, resolved_when: "赤字を減らす具体的な方法が示される" },
     { id: "c2", owner: "owner", category: "気持ち", text: "亡き妻と始めた店を自分の代で畳むのが辛い", importance: 8, reveal_hint: "店の思い出を聞く", min_trust: 7, resolved_when: "店の記憶を残す形が示される" },
     { id: "c3", owner: "owner", category: "常連", text: "常連の高齢者の居場所がなくなる", importance: 5, reveal_hint: "お客さんのことを尋ねる", min_trust: 4, resolved_when: "常連が集まれる場が確保される" },
-    { id: "c4", owner: "owner", category: "体力", text: "腰を痛めて重い本の箱を運ぶのがつらい", importance: 4, reveal_hint: "体調や毎日の作業を気遣う", min_trust: 6, resolved_when: "力仕事を減らす手立てが示される" },
+    { id: "c4", owner: "owner", category: "体力", text: "腰を痛めて重い本の箱を運ぶのがつらい", importance: 4, reveal_hint: "体調や毎日の作業を気遣う", min_trust: 7, resolved_when: "力仕事を減らす手立てが示される" },
     { id: "c5", owner: "owner", category: "取引", text: "取次への支払いが残っていて簡単には畳めない", importance: 3, reveal_hint: "閉めるときの段取りを尋ねる", min_trust: 8, resolved_when: "支払いを片づける道筋が示される" },
   ],
   briefing: [
@@ -176,7 +177,7 @@ try {
   assert.deepEqual(s1.scenario?.characters[0].mood, { emoji: "😔", label: "弱音" });
   // 信頼度はブラウザには出さず、AI (get_state) だけが知っている
   assert.ok(!("trust" in s1) && !s1.log.some((l) => /信頼/.test(l.text)));
-  assert.deepEqual((await call("get_state")).trust, { owner: 7 });
+  assert.deepEqual((await call("get_state")).trust, { owner: 7.2 }); // 打ち解けやすさ 5 なので、+2 の評価でも 1.2
   step("reply で本音・気分が反映され、信頼度は画面に出ない (AI だけが知っている)");
 
   // 2 ターン目: 会話文の中の提案を汲み取って「検討中」に進める (行動の種類は選ばない)

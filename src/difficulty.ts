@@ -8,6 +8,7 @@ import {
   IMPORTANCE_LEVEL_NAMES,
   levelBand,
   MIN_LEVEL,
+  OPENNESS_LEVEL_NAMES,
   PARAM_SPECS,
   sameParams,
   TRUST_LEVEL_NAMES,
@@ -31,6 +32,7 @@ export function randomParams(rand: () => number = Math.random): DifficultyParams
     openAtStart: upToConcerns("openAtStart"),
     nonNegotiable: upToConcerns("nonNegotiable"),
     trustStart: any("trustStart"),
+    openness: any("openness"),
     turnsPerConcern: any("turnsPerConcern"),
     understanding: any("understanding"),
     initiativeTurns: any("initiativeTurns"),
@@ -57,6 +59,21 @@ const TRUST_TEXT = [
   "プレイヤーを信頼していて、打ち解けて話す。",
 ];
 
+/** AI への指示: 打ち解けやすさの段階ごとの、態度の和らぎ方。上がり幅そのものはエンジンが縮める (trustGainRate) */
+const OPENNESS_TEXT = [
+  "良い発言が続いても、なかなか態度を和らげない。打ち解けるには、誠実なやり取りを何度も重ねる必要がある。",
+  "良い発言 1 回では態度を変えない。少しずつしか和らがない。",
+  "良いやり取りが続けば、だんだん打ち解ける。",
+  "誠実な発言には素直に応える。",
+  "人を信じやすく、すぐ心を開く。",
+];
+
+/**
+ * 打ち解けやすさ (1〜10) に応じた、信頼度の上がり幅 (%)。AI が付けた評価 (+1 / +2) に掛ける。
+ * 10 × 打ち解けやすさ + 10 (1 = 20% 〜 9 以上 = 100%)。下がるときは縮めない
+ */
+export const trustGainRate = (openness: number) => Math.min(100, openness * 10 + 10);
+
 /** AI への指示: 物わかりの段階ごとの受け取り方。歩み寄りの条件はエンジンが別に確かめる */
 const UNDERSTANDING_TEXT = [
   "プレイヤーの言葉を字面どおりにしか受け取らず、行間や遠回しな言い方は汲み取らない。あいまいな案は提案として受け取らず、具体的に何をするのかを聞き返す。resolved_when のすべての点が具体的に示されるまで解消しない。",
@@ -82,6 +99,8 @@ const levels = (names: readonly string[], texts: string[]) =>
 export const understandingNote = (v: number) => `${UNDERSTANDING_LEVEL_NAMES[levelBand(v)]}: ${UNDERSTANDING_TEXT[levelBand(v)]}`;
 /** 信頼度 (1〜10) の呼び名 */
 export const trustName = (v: number) => TRUST_LEVEL_NAMES[levelBand(v)];
+/** 各キャラの打ち解けやすさ (1〜10) を、AI への指示の文にする (毎ターン渡す) */
+export const opennessNote = (v: number) => `${OPENNESS_LEVEL_NAMES[levelBand(v)]}: ${OPENNESS_TEXT[levelBand(v)]} (良い発言で上がる信頼度は、評価の ${trustGainRate(v)}%)`;
 /** 本音の重要度 (1〜10) の呼び名 */
 export const importanceName = (v: number) => IMPORTANCE_LEVEL_NAMES[levelBand(v)];
 
@@ -99,11 +118,14 @@ export function difficultyBrief(level: Difficulty, p: DifficultyParams) {
     non_negotiable: p.nonNegotiable,
     /** 登場人物の最初の信頼度の平均 (1〜10) */
     trust_start: p.trustStart,
+    /** 登場人物の打ち解けやすさの平均 (1〜10) */
+    openness: p.openness,
     /** 登場人物の物わかりの平均 (1〜10) */
     understanding: p.understanding,
     turns: turnLimitOf(p),
-    note: `trust_start と understanding は登場人物全員の平均。各キャラの characters[].trust_start / understanding を persona (人柄) に合わせて決め、平均をこの値 ±${AVERAGE_TOLERANCE} に収める (2 人以上なら、人ごとに差をつける)。opening の口調と opening_moods は、各キャラの trust_start の段階 (trust_levels) に合わせる。仕草や内心の描写ではなく、台詞と気分で表す。`,
+    note: `trust_start・openness・understanding は登場人物全員の平均。各キャラの characters[].trust_start / openness / understanding を persona (人柄) に合わせて決め、平均をこの値 ±${AVERAGE_TOLERANCE} に収める (2 人以上なら、人ごとに差をつける)。opening の口調と opening_moods は、各キャラの trust_start の段階 (trust_levels) に合わせる。仕草や内心の描写ではなく、台詞と気分で表す。`,
     trust_levels: levels(TRUST_LEVEL_NAMES, TRUST_TEXT),
+    openness_levels: levels(OPENNESS_LEVEL_NAMES, OPENNESS_TEXT),
     understanding_levels: levels(UNDERSTANDING_LEVEL_NAMES, UNDERSTANDING_TEXT),
     importance_levels: levels(IMPORTANCE_LEVEL_NAMES, IMPORTANCE_TEXT),
   };
