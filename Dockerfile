@@ -3,8 +3,10 @@
 #   docker build -t suriawase-simulator .
 #   docker run --rm -p 8080:8080 suriawase-simulator   → http://localhost:8080
 
+# ベースイメージは版まで固定する (Node.js のセキュリティ修正を確実に含め、ビルドのたびに中身が変わらないように)。
+# 新しい版は Dependabot が pull request で知らせる
 # ---- ビルド ----
-FROM node:24-slim AS build
+FROM node:24.22.2-slim AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --ignore-scripts
@@ -13,7 +15,7 @@ COPY public ./public
 RUN npm run build:client && npm run build:serve
 
 # ---- 実行 (配信に要るものだけ。ソースや node_modules は入れない) ----
-FROM node:24-slim
+FROM node:24.22.2-slim
 ENV NODE_ENV=production
 WORKDIR /app
 COPY --from=build /app/public ./public

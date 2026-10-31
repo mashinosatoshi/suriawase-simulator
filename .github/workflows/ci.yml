@@ -19,6 +19,9 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      # 既知の脆弱性と、配布元 (npm) の署名を確かめる
+      - run: npm audit --audit-level=moderate
+      - run: npm audit signatures
       - run: npm run typecheck
       - run: npm test
       - run: npm run smoke
