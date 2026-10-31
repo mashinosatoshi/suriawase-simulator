@@ -20,6 +20,7 @@ import {
   secretInTextMessage,
   turnLimitOf,
 } from "./shared.js";
+import { scoreGame } from "./score.js";
 import { checkScenario, findSteering, findUnsafeOutput, leaksSecret, reviewSchema, scenarioSchema, steeringMessage, unsafeMessage, type ReplyInput, type Scenario } from "./scenario.js";
 
 const MAX_LOG = 400;
@@ -606,7 +607,8 @@ export class Engine {
     };
     const nonNegotiableLeft = s.concerns.filter((c, i) => c.importance >= NON_NEGOTIABLE && !done(i)).length;
     const type = resolved === total ? "full_agreement" : nonNegotiableLeft === 0 && importance.resolved * 2 >= importance.total ? "compromise" : "carry_over";
-    this.ending = { type, reason, epilogue, resolved, total, importance, nonNegotiableLeft };
+    const score = scoreGame(s, this.concerns.map((c) => c.status));
+    this.ending = { type, reason, epilogue, resolved, total, importance, nonNegotiableLeft, score };
     this.phase = "ended";
     this.current = null;
     this.addLog({ from: "narrator", text: epilogue });
@@ -700,7 +702,7 @@ export class Engine {
         type: "review",
         difficulty: this.difficultyName,
         ending: this.ending,
-        note: "対話が終わりました。プレイヤーへの振り返りを submit_review で書いてください。transcript の実際の発言を引いて具体的に。励ましつつ、次に活かせる形で。解消できなかった懸念すべてに、どんな聞き方・どんな案なら届いたかを (reveal_hint / resolved_when を踏まえて) 書くこと。重要度 (importance) の高い本音を優先できたかにも触れる。ending.nonNegotiableLeft が 1 以上なら、譲れない本音が残ったことが持ち帰りの理由。プレイヤーには信頼度の数値は見えていないので、数値ではなく相手の反応で説明する。concerns[].proposed_by が character の懸念は、プレイヤーの積み重ねで相手から歩み寄ってくれたもの。何が効いたかを具体的に褒める",
+        note: "対話が終わりました。プレイヤーへの振り返りを submit_review で書いてください。transcript の実際の発言を引いて具体的に。励ましつつ、次に活かせる形で。解消できなかった懸念すべてに、どんな聞き方・どんな案なら届いたかを (reveal_hint / resolved_when を踏まえて) 書くこと。重要度 (importance) の高い本音を優先できたかにも触れる。ending.nonNegotiableLeft が 1 以上なら、譲れない本音が残ったことが持ち帰りの理由。ending.score はエンジンが出したスコアで、プレイヤーにも見えている (重要な本音を、手ごわい相手から引き出し・解決するほど高い)。overall でスコアとランクに一言触れ、どの本音で点を伸ばせたか (score.items で取りこぼした、重要度や難しさの高い本音) を示す。点数は書き換えられない。プレイヤーには信頼度の数値は見えていないので、数値ではなく相手の反応で説明する。concerns[].proposed_by が character の懸念は、プレイヤーの積み重ねで相手から歩み寄ってくれたもの。何が効いたかを具体的に褒める",
         transcript: this.log.map((l) => `${name(l)}: ${l.text}`),
         concerns: s.concerns.map((c, i) => ({
           id: c.id,

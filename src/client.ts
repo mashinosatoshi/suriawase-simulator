@@ -1,6 +1,7 @@
 import { config as zodConfig } from "zod";
 import { createLocalBackend, createRemoteBackend, type Action, type Backend } from "./backend.js";
 import {
+  DEFAULT_DIFFICULTY,
   DIFFICULTIES,
   DIFFICULTY_INFO,
   DIFFICULTY_PRESETS,
@@ -21,6 +22,7 @@ import {
   type PublicCharacter,
   type PublicConcern,
   type PublicState,
+  type GameScore,
 } from "./shared.js";
 
 // ---- 小さな DOM ヘルパー (AI やプレイヤーの文字列は必ず textContent で入れる) ----
@@ -514,7 +516,8 @@ function storyDialog(s: PublicState) {
   const tuned = h("span", { class: "tuned" });
   const showTuned = () => (tuned.textContent = tunedParams ? "パラメータを調整済み" : "");
   // 難易度を選び直したら、微調整は初期値に戻す
-  const level = difficultyPicker(chosenDifficulty ?? s.difficulty ?? "normal", (d) => {
+  // まだ選んでいなければ、最初はランダム (遊んでいるゲームがあれば、その難易度)
+  const level = difficultyPicker(chosenDifficulty ?? (s.scenario ? s.difficulty : DEFAULT_DIFFICULTY), (d) => {
     chosenDifficulty = d;
     tunedParams = null;
     showTuned();
@@ -652,7 +655,7 @@ function randomParamsBlock(p: DifficultyParams) {
 
 function agreementMarkdown(s: PublicState) {
   const e = s.ending!;
-  const lines = [`# 合意書: ${s.scenario?.title ?? ""}`, "", `結果: ${ENDING_LABELS[e.type].icon} ${ENDING_LABELS[e.type].title} (解消 ${e.resolved}/${e.total}、重要度 ${e.importance.resolved}/${e.importance.total})`, "", e.epilogue, "", "## 合意事項"];
+  const lines = [`# 合意書: ${s.scenario?.title ?? ""}`, "", `結果: ${ENDING_LABELS[e.type].icon} ${ENDING_LABELS[e.type].title} (解消 ${e.resolved}/${e.total}、重要度 ${e.importance.resolved}/${e.importance.total})`, `スコア: ${e.score.total} / ${e.score.max} 点 (ランク ${e.score.rank})`, "", e.epilogue, "", "## 合意事項"];
   const tag = (c: PublicConcern) => `[${c.category}${c.importance === undefined ? "" : `・重要度 ${c.importance} ${IMPORTANCE_LEVEL_NAMES[levelBand(c.importance)]}`}]`;
   const done = s.concerns.filter((c) => c.status === "resolved");
   lines.push(...(done.length ? done.map((c) => `- ${tag(c)} ${c.text} → ${c.agreement}`) : ["- (なし)"]));
@@ -664,6 +667,35 @@ function agreementMarkdown(s: PublicState) {
 const sectionTitle = (t: string) => h("h2", { class: "section-title" }, t);
 
 /** AI が書いた振り返り。書き終わるまでは待ち表示 */
+/**
+ * スコア: どれだけ重要な本音を、手ごわい相手から引き出し、解決に導いたか。
+ * 内訳は重要度の高い順に、取れた点 / 取れた最高点と、引き出し・解決それぞれの難しさを出す
+ */
+function scoreBlock(s: PublicState, score: GameScore) {
+  const rate = (r: number) => `×${(r / 100).toFixed(2).replace(/0$/, "")}`;
+  const rows = [...score.items]
+    .sort((a, b) => b.importance - a.importance)
+    .map((x) => {
+      const c = s.concerns.find((k) => k.id === x.id);
+      const got = x.discoverPoints + x.resolvePoints;
+      const state = x.resolved ? "解決" : x.discovered ? "引き出した" : "見つけられなかった";
+      return h(
+        "div",
+        { class: `srow${got ? "" : " zero"}` },
+        h("span", { class: "sname" }, `${c?.category ?? x.id} (重要度 ${x.importance})`),
+        h("span", { class: "spts" }, `${got} / ${x.maxPoints}`),
+        h("small", {}, `${state} — 引き出し ${x.discoverPoints} 点 (難しさ ${rate(x.discoverRate)}) · 解決 ${x.resolvePoints} 点 (難しさ ${rate(x.resolveRate)})`),
+      );
+    });
+  return h(
+    "div",
+    { class: "score" },
+    h("div", { class: "shead" }, h("span", { class: `rank r${score.rank}` }, score.rank), h("span", { class: "stotal" }, `${score.total}`, h("small", {}, ` / ${score.max} 点 (${score.percent}%)`))),
+    h("p", { class: "muted text-sm" }, "重要な本音ほど、打ち解けにくい相手・物わかりの悪い相手からほど高い点になります。引き出すと「引き出し点」、解決に導くと「解決点」が入ります。"),
+    h("details", {}, h("summary", {}, "スコアの内訳"), ...rows, score.bonus > 0 && h("div", { class: "srow" }, h("span", { class: "sname" }, "完全合意ボーナス"), h("span", { class: "spts" }, `+${score.bonus}`))),
+  );
+}
+
 function reviewBlock(s: PublicState) {
   const r = s.review;
   if (!r) {
@@ -721,6 +753,7 @@ function renderEnding(s: PublicState) {
         h("p", { class: "muted center text-sm" }, `解消した本音の重要度: ${cur.ending.importance.resolved} / ${cur.ending.importance.total}　難易度: ${DIFFICULTY_INFO[cur.difficulty]?.label ?? "普通"}${cur.customized ? " (調整あり)" : ""}`),
         cur.ending.nonNegotiableLeft > 0 && h("p", { class: "center warn" }, `譲れない本音が ${cur.ending.nonNegotiableLeft} つ残ったため、合意には至りませんでした。`),
         cur.difficulty === "random" && cur.params && randomParamsBlock(cur.params),
+        scoreBlock(cur, cur.ending.score),
         h("p", { class: "muted center" }, cur.ending.epilogue),
         reviewBlock(cur),
         h("div", {}, sectionTitle("合意事項"), ...(done.length ? done.map((c) => concernCard(cur, c, true)) : [h("p", { class: "muted" }, "なし")])),

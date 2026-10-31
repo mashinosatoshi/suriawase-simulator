@@ -87,6 +87,18 @@ aside { min-height: 0; overflow-y: auto; display: grid; gap: 14px; align-content
 .concern .cat { font-size: 11px; color: var(--muted); border: 1px solid var(--line); border-radius: 6px; padding: 0 6px; }
 .concern .st { margin-left: auto; font-size: 11px; font-weight: 600; white-space: nowrap; }
 .concern .imp { font-size: 11px; color: var(--muted); white-space: nowrap; }
+.score { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; background: var(--panel2); display: grid; gap: 6px; }
+.score .shead { display: flex; align-items: center; justify-content: center; gap: 12px; }
+.score .rank { font-size: 30px; font-weight: 800; line-height: 1; width: 48px; height: 48px; border-radius: 50%; display: grid; place-items: center; color: #fff; background: var(--muted); }
+.score .rank.rS { background: #c58a00; } .score .rank.rA { background: var(--ok); } .score .rank.rB { background: var(--accent-ink); } .score .rank.rC { background: #7a7f8c; }
+.score .stotal { font-size: 28px; font-weight: 700; }
+.score .stotal small { font-size: 14px; font-weight: 400; color: var(--muted); }
+.score > p { text-align: center; margin: 0; }
+.score details summary { cursor: pointer; color: var(--accent-ink); font-size: 13px; font-weight: 600; }
+.score .srow { display: grid; grid-template-columns: 1fr auto; gap: 0 10px; font-size: 13px; padding: 6px 0; border-top: 1px solid var(--line); }
+.score .srow small { grid-column: 1 / -1; color: var(--muted); font-size: 12px; }
+.score .srow.zero .sname, .score .srow.zero .spts { color: var(--muted); }
+.score .spts { font-weight: 600; white-space: nowrap; }
 .concern .imp.high { color: var(--accent-ink); font-weight: 600; }
 .concern .imp.must { color: var(--warn); font-weight: 700; }
 .concern.hidden { border-style: dashed; color: var(--muted); }

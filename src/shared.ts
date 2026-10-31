@@ -80,6 +80,41 @@ export interface Ending {
   importance: { resolved: number; total: number };
   /** 解消できなかった「譲れない」本音の数。1 つでも残ると持ち帰り */
   nonNegotiableLeft: number;
+  /** スコア (エンジンが計算する。score.ts) */
+  score: GameScore;
+}
+
+export type ScoreRank = "S" | "A" | "B" | "C" | "D";
+
+/** 本音 1 つぶんの得点 */
+export interface ScoreItem {
+  id: string;
+  importance: number;
+  discovered: boolean;
+  resolved: boolean;
+  /** 引き出しの難しさ (%)。打ち解けるまで話してくれない本音ほど高い */
+  discoverRate: number;
+  /** 解決の難しさ (%)。物わかりが悪く、最初から信頼されていない相手ほど高い */
+  resolveRate: number;
+  /** 引き出し点 (重要度 × 引き出しの難しさ)。引き出せなかったら 0 */
+  discoverPoints: number;
+  /** 解決点 (重要度 × 解決の難しさ)。解決できなかったら 0 */
+  resolvePoints: number;
+  /** この本音で取れた最高点 (引き出し点 + 解決点) */
+  maxPoints: number;
+}
+
+/** どれだけ重要な本音を、手ごわい相手から引き出し、解決に導いたか */
+export interface GameScore {
+  total: number;
+  /** このシナリオの満点 (すべて引き出して解決し、完全合意したとき) */
+  max: number;
+  /** 満点に対する割合 (%、切り捨て) */
+  percent: number;
+  rank: ScoreRank;
+  /** 完全合意のボーナス (完全合意でなければ 0) */
+  bonus: number;
+  items: ScoreItem[];
 }
 
 // ---- 難易度 ----------------------------------------------------------------------
@@ -91,6 +126,8 @@ export type Difficulty = "easy" | "normal" | "hard" | "random";
 /** パラメータの組 (プリセット) がある難易度 */
 export type PresetDifficulty = Exclude<Difficulty, "random">;
 export const DIFFICULTIES: Difficulty[] = ["easy", "normal", "hard", "random"];
+/** 開始画面で最初に選ばれている難易度 (プレイヤーがまだ選んでいないとき) */
+export const DEFAULT_DIFFICULTY: Difficulty = "random";
 
 /** 開始画面に出す説明 */
 export const DIFFICULTY_INFO: Record<Difficulty, { label: string; summary: string }> = {
