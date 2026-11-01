@@ -202,7 +202,7 @@ try {
   assert.ok(!JSON.stringify(s1b).includes("朗読会の入場料で赤字を減らす"), "対処案がブラウザに送られている");
   step("会話文の中の提案を、発言からの引用つきで「検討中」に進められる (言い換えは弾かれる)");
 
-  // 持ち帰りボタン → 終了
+  // 「締める」ボタン → 終了
   assert.equal(await post("/api/defer", { text: "" }), 204);
   const t2 = await call("wait_for_player_turn", { timeout_sec: 2 });
   assert.equal(t2.defer, true);
@@ -216,7 +216,7 @@ try {
   assert.equal(s2.ending?.type, "carry_over");
   assert.ok(s2.concerns.every((c) => c.text), "終了後は見つけられなかった懸念も公開される");
   assert.equal(s2.review, null);
-  step("持ち帰りで終了。epilogue が必須で、結末と未発見の懸念が公開される");
+  step("「締める」で終了。epilogue が必須で、結末と未発見の懸念が公開される");
 
   // 振り返り: 終了後に AI へ依頼が届き、解消できなかった懸念すべてに助言が要る
   const rv = await call("wait_for_player_turn", { timeout_sec: 2 });

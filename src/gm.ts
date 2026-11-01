@@ -62,7 +62,7 @@ export class BuiltinGm {
     engine.onChange(() => void this.tick());
   }
 
-  /** この AI を使う (次の呼び出しから) */
+  /** この AI を使う (次の呼び出しから。対話の途中なら、新しい会話に全状態を渡して引き継ぐ) */
   select(sel: Selection): string | null {
     if (!this.keys.has(sel.provider)) return "その AI の API キーが設定されていません。キーを入力して「決定」を押してください";
     if (!isValidModelId(sel.model)) return "モデル ID の形式が正しくありません";
@@ -149,8 +149,8 @@ export class BuiltinGm {
       this.pending = [];
     }
     const session = this.session!;
-    // 会話の途中から引き継ぐとき (同じシナリオでやり直し等) は、隠し情報を含む全状態を最初に渡す
-    const primer = fresh && work.type !== "new_game" ? `これは進行中のゲームです。いまの全状態 (隠し情報を含む):\n${JSON.stringify(this.engine.fullState())}\n\n` : "";
+    // 会話の途中から引き継ぐとき (同じシナリオでやり直し・対話の途中で AI を変えた等) は、隠し情報と会話全体を含む全状態を最初に渡す
+    const primer = fresh && work.type !== "new_game" ? `これは進行中のゲームです。いまの全状態 (隠し情報を含む):\n${JSON.stringify(this.engine.fullState({ wholeLog: true }))}\n\n` : "";
     let input: TurnInput = { toolResults: this.pending, text: primer + renderWork(work) };
     this.pending = [];
     let lastProblem = "";

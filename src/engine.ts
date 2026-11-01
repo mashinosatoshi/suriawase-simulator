@@ -67,10 +67,13 @@ export function stripSelfIntro(text: string, name: string): string {
   return out.trim() ? out : text;
 }
 
-/** 懸念が 1 ターンに進める段階 */
+/**
+ * 懸念が 1 ターンに進める段階。revealed → resolved は「案が出たその場で合意」(即決) で、
+ * プレイヤーの今回の発言から案を引用できるときだけ。譲れない本音 (NON_NEGOTIABLE 以上) は即決させない
+ */
 const STEPS: Record<ConcernStatus, ConcernStatus[]> = {
   hidden: ["revealed", "proposed"],
-  revealed: ["proposed"],
+  revealed: ["proposed", "resolved"],
   proposed: ["resolved", "revealed"],
   resolved: [],
 };
@@ -91,7 +94,7 @@ interface CurrentAction {
   turn: number;
   to?: string;
   text: string;
-  /** 「持ち帰って終える」ボタンで送られた */
+  /** 「締める」ボタンで送られた */
   defer: boolean;
 }
 
@@ -103,7 +106,7 @@ export type Work =
       turn: number;
       turns_left: number;
       final_turn: boolean;
-      /** 「持ち帰って終える」が押された */
+      /** 「締める」が押された */
       defer: boolean;
       to: string | null;
       text: string;
@@ -310,7 +313,7 @@ export class Engine {
   }
 
   // ---- プレイヤーの手番 ---------------------------------------------------
-  /** 発言を送る。defer=true は「持ち帰って終える」ボタン (発言は任意) */
+  /** 発言を送る。defer=true は「締める」ボタン (発言は任意) */
   act(input: { text?: unknown; to?: unknown }, defer = false): string | null {
     if (this.phase === "ended") return "対話は終了しています。「最初から」か「新しいシナリオ」を選んでください";
     if (this.phase === "setup" || !this.scenario) return "シナリオの準備中です";
@@ -322,7 +325,7 @@ export class Engine {
     const to = typeof input.to === "string" && this.scenario.characters.some((c) => c.id === input.to) ? input.to : undefined;
 
     this.turn++;
-    const shown = text || "今日はここまでにして、いったん持ち帰らせてください。";
+    const shown = text || "今日はここまでにしましょう。";
     this.current = { turn: this.turn, to, text: shown, defer };
     this.playerTexts.push({ turn: this.turn, text: shown });
     this.addLog({ from: "player", text: shown, to });
@@ -444,32 +447,37 @@ export class Engine {
           continue;
         }
       }
+      // 案が出たその場で合意する (検討中を挟まない)。譲れない本音は、一度「本当に大丈夫か」と確かめてから
+      const instant = from === "revealed" && u.to === "resolved";
+      if (instant && c.importance >= NON_NEGOTIABLE) {
+        errors.push(`懸念 "${u.id}" は譲れない本音なので、案が出たその場では解消できません。to=proposed (検討中) にして、${c.owner} の言葉で「本当にそれで大丈夫か」と一度確かめてください。解消は、プレイヤーがその疑念に答えた次のターン以降です`);
+        continue;
+      }
       let by: "player" | "character" = "player";
-      if (u.to === "proposed") {
-        if (action.defer) {
-          errors.push(`懸念 "${u.id}": 持ち帰って終えるターンでは proposed に進められません`);
+      if (u.to === "proposed" && action.defer) {
+        errors.push(`懸念 "${u.id}": 「締める」のターンでは proposed に進められません`);
+        continue;
+      }
+      if (u.initiative) {
+        // 相手からの歩み寄り: プレイヤーの積み重ねが根拠でなければならない
+        const why = this.initiativeError(u.id, u.evidence ?? [], from, ownerTrust, initiatives > 0);
+        if (why) {
+          errors.push(why);
           continue;
         }
-        if (u.initiative) {
-          // 相手からの歩み寄り: プレイヤーの積み重ねが根拠でなければならない
-          const why = this.initiativeError(u.id, u.evidence ?? [], from, ownerTrust, initiatives > 0);
-          if (why) {
-            errors.push(why);
-            continue;
-          }
-          initiatives++;
-          by = "character";
-        } else {
-          // プレイヤーの提案: 今回の発言で実際に言ったことでなければならない (AI が提案を作って進めるのを防ぐ)
-          const quote = squash(u.quote ?? "");
-          if (quote.length < MIN_QUOTE) {
-            errors.push(`懸念 "${u.id}" を proposed にするには quote が必要です。プレイヤーの今回の発言から、提案・条件提示にあたる部分を一字一句そのまま ${MIN_QUOTE} 文字以上引用してください`);
-            continue;
-          }
-          if (!squash(action.text).includes(quote)) {
-            errors.push(`懸念 "${u.id}" の quote がプレイヤーの今回の発言に見つかりません。言い換えず、発言の該当部分をそのまま引用してください。発言に具体的な提案が無ければ proposed にはできません (積み重ねを根拠に相手から歩み寄るなら、quote ではなく initiative=true と evidence を使います)`);
-            continue;
-          }
+        initiatives++;
+        by = "character";
+      } else if (u.to === "proposed" || instant) {
+        // プレイヤーの提案: 今回の発言で実際に言ったことでなければならない (AI が提案を作って進めるのを防ぐ)
+        const quote = squash(u.quote ?? "");
+        const goal = instant ? "その場で resolved (即決)" : "proposed";
+        if (quote.length < MIN_QUOTE) {
+          errors.push(`懸念 "${u.id}" を ${goal} にするには quote が必要です。プレイヤーの今回の発言から、提案・条件提示にあたる部分を一字一句そのまま ${MIN_QUOTE} 文字以上引用してください`);
+          continue;
+        }
+        if (!squash(action.text).includes(quote)) {
+          errors.push(`懸念 "${u.id}" の quote がプレイヤーの今回の発言に見つかりません。言い換えず、発言の該当部分をそのまま引用してください。発言に具体的な提案が無ければ ${goal} にはできません (積み重ねを根拠に相手から歩み寄るなら、quote ではなく initiative=true と evidence を使います)`);
+          continue;
         }
       }
       if ((u.to === "proposed" || u.to === "resolved" || (from === "proposed" && u.to === "revealed")) && note.length < 4) {
@@ -542,7 +550,10 @@ export class Engine {
       } else if (p.to === "revealed") {
         rt.proposal = undefined;
         rt.proposedBy = undefined;
-      } else if (p.to === "resolved") rt.agreement = p.note;
+      } else if (p.to === "resolved") {
+        rt.agreement = p.note;
+        if (p.from === "revealed") rt.proposedBy = p.by; // 即決: プレイヤーの案にその場で合意した
+      }
     }
 
     if (reason) this.finish(reason, epilogue);
@@ -694,7 +705,7 @@ export class Engine {
       const a = this.current;
       const left = this.turnLimit - a.turn;
       const notes: string[] = [];
-      if (a.defer) notes.push("プレイヤーは「持ち帰って終える」を押しました。この返答で対話を締めくくってください (epilogue 必須)");
+      if (a.defer) notes.push("プレイヤーは「締める」を押しました。この返答で対話を締めくくってください (epilogue 必須)");
       if (left <= 0) notes.push("これが最終ターンです。この返答で対話を締めくくってください (epilogue 必須)");
       else if (left <= 2) notes.push(`残り ${left} ターンです`);
       return {
@@ -764,8 +775,11 @@ export class Engine {
     });
   }
 
-  /** AI 用の完全な状態 (隠し情報を含む。ブラウザには絶対に送らない) */
-  fullState() {
+  /**
+   * AI 用の完全な状態 (隠し情報を含む。ブラウザには絶対に送らない)。
+   * wholeLog = 会話をすべて含める (対話の途中から別の AI が引き継ぐとき。ふだんは直近だけ)
+   */
+  fullState({ wholeLog = false } = {}) {
     const s = this.scenario;
     return {
       phase: this.phase,
@@ -787,7 +801,7 @@ export class Engine {
       ending: this.ending,
       review: this.review,
       pending: this.pendingWork(),
-      recent_log: this.log.slice(-12),
+      recent_log: wholeLog ? this.log : this.log.slice(-12),
     };
   }
 

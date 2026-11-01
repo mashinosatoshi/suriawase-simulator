@@ -321,3 +321,34 @@ test("使っている AI のキーを入れ直すと、新しいキーで会話�
   assert.match(provider.sessions[1].inputs[0].text ?? "", /進行中のゲームです/);
   assert.equal(provider.sessions[1].inputs[0].toolResults?.length ?? 0, 0);
 });
+
+test("対話の途中で AI を変えると、新しいモデルが会話の最初から引き継ぎ、止まっていた返答を再試行で続ける", async () => {
+  const turns = 8;
+  const { engine, provider, gm } = setup([
+    [() => call("start_scenario", scenario), ...Array.from({ length: turns }, (_, i) => () => reply(i + 1)), () => apiError(429, "rate limit exceeded")],
+    [() => reply(turns + 1)],
+  ]);
+  engine.requestNewGame("");
+  await gm.tick();
+  for (let t = 1; t <= turns; t++) {
+    engine.act({ text: t === 1 ? "最初に予算のことを伺えますか" : `続けます (${t})` });
+    await gm.tick();
+  }
+  engine.act({ text: "もう少し聞かせてください" });
+  await gm.tick();
+  assert.ok(gm.status().error); // 前の AI は利用上限で止まった
+  assert.ok(!JSON.stringify(engine.fullState()).includes("最初に予算"), "ふだんの全状態は直近の会話だけ");
+
+  assert.equal(gm.select({ provider: "openai", model: "gpt-6.1-sol" }), null);
+  assert.equal(gm.status().error, null);
+  gm.retry(); // 画面は、AI を変えたら止まっていた返答を再試行する
+  await gm.tick();
+  assert.equal(engine.phase, "player_turn");
+  assert.equal(engine.publicState().turn, turns + 1);
+  assert.equal(provider.sessions.length, 2);
+  const next = provider.sessions[1];
+  assert.equal(next.options.model, "gpt-6.1-sol");
+  assert.match(next.inputs[0].text ?? "", /進行中のゲームです/);
+  assert.match(next.inputs[0].text ?? "", /最初に予算のことを伺えますか/); // 直近だけでなく、会話の最初から渡っている
+  assert.equal(next.inputs[0].toolResults?.length ?? 0, 0); // 前の AI のツール結果は持ち込まない
+});

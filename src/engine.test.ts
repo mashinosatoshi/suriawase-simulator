@@ -82,6 +82,8 @@ function playing(text = "こんにちは") {
 }
 const reply = (e: Engine, r: Partial<ReplyInput> = {}) => e.reply({ turn: 1, lines: [line()], ...r });
 const errorsOf = (r: { ok: boolean; errors?: string[] }) => (r.ok ? "" : (r.errors ?? []).join("\n"));
+/** 通るはずの返答。失敗したら理由を出す */
+const must = (r: ReturnType<Engine["reply"]>) => assert.ok(r.ok, errorsOf(r));
 const work = (e: Engine) => e.pendingWork() as Extract<Work, { type: "player_action" }>;
 
 test("new_game の依頼が仕事として届き、シナリオ開始で消える", () => {
@@ -158,7 +160,7 @@ test("手番の排他制御: AI の返事が来るまでプレイヤーは次に
   assert.equal(e.act({ text: "続き" }), null);
 });
 
-test("発言が空だと送れない (「持ち帰って終える」だけは空でもよい)", () => {
+test("発言が空だと送れない (「締める」だけは空でもよい)", () => {
   const e = started();
   assert.match(e.act({ text: "   " }) ?? "", /入力/);
   assert.equal(e.phase, "player_turn");
@@ -335,6 +337,42 @@ test("proposed→resolved は次のターン以降 / 差し戻しもできる", 
   assert.equal(e.fullState().concerns?.[2].proposal, undefined); // 差し戻しで案は取り下げられる
 });
 
+test("即決: 本音が見えた懸念は、プレイヤーの案にその場で合意できる (引用が要る / 歩み寄りでは使えない)", () => {
+  const e = playing("お祭りのことを聞かせてください。");
+  assert.ok(reply(e, { concern_updates: [{ id: "c3", to: "revealed", asked: "お祭りのこと" }] }).ok);
+  e.act({ text: BIG });
+  const instant = (u: object = {}) => e.reply({ turn: 2, lines: [line()], concern_updates: [{ id: "c3", to: "resolved" as const, note: "行列は川沿いの道を通す", ...u }] });
+  // 案を出したのがプレイヤーであることは、検討中に進めるときと同じく引用で確かめる
+  assert.match(errorsOf(instant()), /quote が必要/);
+  assert.match(errorsOf(instant({ quote: "行列の道を変える案" })), /見つかりません/);
+  // 相手からの歩み寄りは、プレイヤーが受け入れるまで解消しない
+  assert.match(errorsOf(instant({ quote: Q3, initiative: true, evidence: [Q3] })), /to=proposed のときだけ/);
+  const r = instant({ quote: Q3 });
+  assert.ok(r.ok, errorsOf(r));
+  assert.equal(e.publicState().concerns[0].status, "resolved");
+  assert.equal(e.fullState().concerns?.[2].agreement, "行列は川沿いの道を通す");
+  assert.equal(e.fullState().concerns?.[2].proposed_by, "player");
+
+  // 「締める」のターンでも、最後の案にその場で合意できる
+  const e2 = playing("お祭りのことを聞かせてください。");
+  assert.ok(reply(e2, { concern_updates: [{ id: "c3", to: "revealed", asked: "お祭りのこと" }] }).ok);
+  e2.act({ text: BIG }, true);
+  must(e2.reply({ turn: 2, lines: [line()], concern_updates: [{ id: "c3", to: "resolved", note: "行列は川沿いの道を通す", quote: Q3 }], epilogue: "続きはまた今度。" }));
+  assert.equal(e2.phase, "ended");
+  assert.equal(e2.publicState().ending?.resolved, 1);
+});
+
+test("譲れない本音は即決できず、検討中で一度確かめてから解消する", () => {
+  const e = playing("費用のことが気になります。");
+  assert.ok(reply(e, { concern_updates: [{ id: "c1", to: "revealed", asked: "費用のこと" }] }).ok);
+  e.act({ text: BIG });
+  assert.match(errorsOf(e.reply({ turn: 2, lines: [line()], concern_updates: [{ id: "c1", to: "resolved", note: "小さな木橋で合意", quote: Q1 }] })), /譲れない本音.*本当にそれで大丈夫か/);
+  must(e.reply({ turn: 2, lines: [line("mayor", "木橋で、本当に大水に耐えられるかのう？")], concern_updates: [{ id: "c1", to: "proposed", note: "小さな木橋にする", quote: Q1 }] }));
+  e.act({ text: "毎年の点検は隣村が受け持ちます。" });
+  must(e.reply({ turn: 3, lines: [line("mayor", "それなら安心じゃ。")], concern_updates: [{ id: "c1", to: "resolved", note: "小さな木橋で、点検は隣村が受け持つ" }] }));
+  assert.equal(e.publicState().concerns[0].status, "resolved");
+});
+
 test("存在しない話者・懸念は拒否される", () => {
   const e = playing();
   assert.equal(reply(e, { lines: [line("ghost")] }).ok, false);
@@ -342,11 +380,11 @@ test("存在しない話者・懸念は拒否される", () => {
   assert.equal(reply(e, { moods: [{ character: "ghost", emoji: "😀", label: "x" }] }).ok, false);
 });
 
-test("持ち帰りで終了: epilogue が必須で、検討中に進めることはできない", () => {
+test("「締める」で終了: epilogue が必須で、検討中に進めることはできない", () => {
   const e = started();
   e.act({ text: BIG }, true);
-  assert.match(work(e).note, /持ち帰って終える/);
-  assert.match(errorsOf(reply(e, { concern_updates: [{ id: "c1", to: "proposed", note: "小さな木橋にする", quote: Q1 }], epilogue: "また。" })), /持ち帰って終えるターン/);
+  assert.match(work(e).note, /「締める」/);
+  assert.match(errorsOf(reply(e, { concern_updates: [{ id: "c1", to: "proposed", note: "小さな木橋にする", quote: Q1 }], epilogue: "また。" })), /「締める」のターン/);
   const noEpilogue = reply(e);
   assert.equal(noEpilogue.ok, false);
   assert.match(errorsOf(noEpilogue), /epilogue/);
@@ -455,7 +493,7 @@ test("waitForWork: 仕事が来たら待っている側が起きる / タイム�
 
 // ---- 終了後の振り返り ---------------------------------------------------------
 
-/** 持ち帰りで終わらせた状態 (c1 だけ見つかっている) */
+/** 「締める」で終わらせた状態 (c1 だけ見つかっている) */
 function endedWithOneFound() {
   const e = playing("予算はどのくらいですか？");
   assert.ok(reply(e, { concern_updates: [{ id: "c1", to: "revealed", asked: "予算はどのくらい" }] }).ok);
@@ -514,7 +552,7 @@ test("振り返りは終了後だけ。解消済みの懸念には助言を付�
   const playingEngine = playing();
   assert.match(errorsOf(playingEngine.submitReview(reviewInput([]))), /終了後だけ/);
 
-  // c1 だけ解消して持ち帰る → 助言が要るのは c2〜c5
+  // c1 だけ解消して「締める」 → 助言が要るのは c2〜c5
   const e = playing(BIG);
   assert.ok(reply(e, { concern_updates: [{ id: "c1", to: "proposed", note: "小さな木橋", quote: Q1 }] }).ok);
   e.act({ text: "どうでしょう" });
@@ -643,8 +681,6 @@ function ripe(trustBump = true) {
   return e;
 }
 const reply3 = (e: Engine, updates: NonNullable<ReplyInput["concern_updates"]>, turn = 3) => e.reply({ turn, lines: [line()], concern_updates: updates });
-/** 通るはずの返答。失敗したら理由を出す */
-const must = (r: ReturnType<Engine["reply"]>) => assert.ok(r.ok, errorsOf(r));
 
 test("条件がそろえば、相手の側から歩み寄れる (検討中に進み、プレイヤーが受け入れたら解消)", () => {
   const e = ripe();
@@ -707,11 +743,11 @@ test("歩み寄りのペース: 1 回の返答で 1 つ、2 ターンに 1 回�
   must(e.reply({ turn: 5, lines: [line()], concern_updates: [walk("c3", E3, "行列は川沿いの道を通したい")] }));
 });
 
-test("持ち帰って終えるターンには歩み寄れない", () => {
+test("「締める」のターンには歩み寄れない", () => {
   const e = ripe();
   assert.ok(e.reply({ turn: 3, lines: [line()] }).ok);
   e.act({ text: "今日はここまでにします" }, true);
-  assert.match(errorsOf(e.reply({ turn: 4, lines: [line()], epilogue: "また話そう。", concern_updates: [walk("c1", E1)] })), /持ち帰って終えるターン/);
+  assert.match(errorsOf(e.reply({ turn: 4, lines: [line()], epilogue: "また話そう。", concern_updates: [walk("c1", E1)] })), /「締める」のターン/);
 });
 
 test("差し戻された後の歩み寄りは、差し戻し以降の発言が根拠になる", () => {
@@ -1070,7 +1106,7 @@ test("ブラウザから届いた難易度とパラメータを確かめる", ()
 // ---- 本音の重要度 (要望の緩急) ------------------------------------------------------------
 
 /**
- * ids の順に 1 ターンに 1 つずつ提案が当たって解消していき、最後は持ち帰って終える。
+ * ids の順に 1 ターンに 1 つずつ提案が当たって解消していき、最後は「締める」で終える。
  * 信頼度が要る本音 (村長の c4、渡し守の c2・c5) にも届くよう、最初の 3 ターンで村長 6→7・渡し守 4→6.4 にしておく
  * (渡し守は頑なで、+2 の評価でも 0.8 ずつしか上がらない)
  */
@@ -1250,7 +1286,7 @@ test("チャットに API キーらしい文字列を貼ったら送らない (�
   const e = started();
   const fakes = ["sk-ant-api03-" + "x".repeat(30), "sk-proj-" + "A".repeat(30), "AIza" + "B".repeat(35), "AQ." + "C".repeat(30)];
   for (const key of fakes) assert.match(e.act({ text: `このキーです: ${key}` }) ?? "", /キーは「AI の設定」でだけ入力してください/, key.slice(0, 6));
-  assert.match(e.act({ text: fakes[0] }, true) ?? "", /API キー/); // 持ち帰りの別れのひとことでも
+  assert.match(e.act({ text: fakes[0] }, true) ?? "", /API キー/); // 「締める」の別れのひとことでも
   assert.equal(e.phase, "player_turn");
   assert.equal(e.publicState().turn, 0); // 何も送られていない
   // 似ているだけのふつうの文は通る
