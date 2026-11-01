@@ -198,9 +198,15 @@ function importanceBadge(v: number) {
 const TOUCH = matchMedia("(pointer: coarse)").matches;
 if (TOUCH) $("text").setAttribute("enterkeyhint", "enter");
 
+/** 前回の描画で入力欄が使えたか (自分の番が回ってきた瞬間を見分ける) */
+let composerOpen = false;
+
+/** 入力欄を状態に合わせる。自分の番が回ってきた瞬間なら true */
 function updateComposer() {
   const s = state;
   const can = s?.phase === "player_turn";
+  const opened = can && !composerOpen;
+  composerOpen = can;
   const text = $<HTMLTextAreaElement>("text");
   text.disabled = !can;
   $<HTMLButtonElement>("send").disabled = !can;
@@ -222,6 +228,7 @@ function updateComposer() {
   to.hidden = cast.length < 2;
   to.disabled = !can;
   $<HTMLButtonElement>("replay").disabled = !s?.scenario;
+  return opened;
 }
 
 $("composer").addEventListener("submit", async (e) => {
@@ -235,7 +242,7 @@ $("composer").addEventListener("submit", async (e) => {
 // 唯一のコマンド: 今回はここまでにして終える (入力欄の文は、別れのひとこととして一緒に送る)
 $("defer").addEventListener("click", async () => {
   if (state?.phase !== "player_turn") return;
-  if (!confirm("持ち帰って、この対話を終えます。よろしいですか？")) return;
+  if (!confirm("ここで、この対話を締めくくります。よろしいですか？")) return;
   const text = $<HTMLTextAreaElement>("text");
   const to = $<HTMLSelectElement>("to").value || undefined;
   if (await post("defer", { text: text.value.trim(), to })) text.value = "";
@@ -255,6 +262,7 @@ $("replay").addEventListener("click", () => {
   endingDismissed = false;
   post("replay");
 });
+$("aichange").addEventListener("click", openAiSetup);
 $("newgame").addEventListener("click", () => {
   if (state?.scenario && state.phase !== "ended" && !confirm("いまの対話を捨てて、新しいシナリオを作りますか？")) return;
   composeNew = true;
@@ -272,10 +280,26 @@ function aiHint(s: PublicState) {
   return false;
 }
 
-/** AI の呼び出しが失敗して止まっているときの表示と再試行ボタン */
-function aiErrorBox(s: PublicState) {
+/** AI の呼び出しが失敗して止まっているときの表示と再試行ボタン。canSwitch = 別の AI に変えて続けるボタンも出す (会話中の案内) */
+function aiErrorBox(s: PublicState, canSwitch = false) {
   if (!s.ai.error) return false;
-  return h("div", { class: "aierr" }, h("span", {}, `⚠ ${s.ai.error}`), h("button", { type: "button", onclick: () => post("ai/retry") }, "再試行"));
+  return h(
+    "div",
+    { class: "aierr" },
+    h("span", {}, `⚠ ${s.ai.error}`),
+    h(
+      "span",
+      { class: "aierr-actions" },
+      canSwitch && s.ai.mode === "builtin" && h("button", { type: "button", onclick: openAiSetup }, "AI を変更"),
+      h("button", { type: "button", onclick: () => post("ai/retry") }, "再試行"),
+    ),
+  );
+}
+
+/** 「AI の設定」を開く。対話の途中でも開け、閉じるとそのまま対話に戻る */
+function openAiSetup() {
+  aiSetupOpen = true;
+  render();
 }
 
 const OTHER_MODEL = "__other__";
@@ -449,10 +473,11 @@ let paramsOpen = false;
  */
 function renderSetup(s: PublicState) {
   const el = $("setup");
-  const show = s.phase === "setup" || composeNew;
+  const aiStep = s.ai.mode === "builtin" && (aiSetupOpen || !s.ai.current);
+  // 対話の途中で「AI を変更」を押したときは、AI の設定だけを開く
+  const show = s.phase === "setup" || composeNew || (aiStep && aiSetupOpen);
   el.hidden = !show;
   const generating = s.phase === "setup" && s.generating && !composeNew;
-  const aiStep = s.ai.mode === "builtin" && (aiSetupOpen || !s.ai.current);
   // 入力中のフォームを、無関係な状態更新で作り直さない
   const key = !show
     ? "hidden"
@@ -498,14 +523,19 @@ function aiSetupDialog(s: PublicState) {
     confirm.disabled = true;
     if (await post("ai/select", choice)) {
       aiSetupOpen = false;
+      // 対話の途中で、相手の返答や振り返りを待っている (失敗して止まっている) なら、新しい AI で続きを試す
+      const cur = state;
+      if (!composeNew && (cur?.phase === "ai_turn" || (cur?.phase === "ended" && !cur.review))) void post("ai/retry");
       render();
     } else confirm.disabled = false;
   });
+  const midGame = !!s.scenario && s.phase !== "setup" && !composeNew;
   return h(
     "div",
     { class: "dialog" },
     h("h2", {}, "AI の設定"),
     h("p", { class: "muted" }, "シナリオを作り、相手役を演じる AI を選びます。使うサービスを選んで API キーを入力し、「決定」を押すとモデルを選べます。"),
+    midGame && h("p", { class: "muted" }, "対話の途中で変えると、次の返答から新しい AI が相手役を引き継ぎます。これまでの会話と本音の進み具合は、そのまま引き継がれます。"),
     picker.el,
     h("div", { class: "actions" }, s.ai.current && h("button", { onclick: () => ((aiSetupOpen = false), render()) }, "戻る"), confirm),
   );
@@ -825,13 +855,15 @@ function render() {
   const ai = $("ai");
   ai.textContent = `AI: ${s.ai.label}`;
   ai.className = `chip ${s.ai.connected ? "on" : "off"}`;
+  // 対話の途中でも AI を変えられる (内蔵 GM のとき。MCP 版の AI は Claude Code 側で決まる)
+  $("aichange").hidden = s.ai.mode !== "builtin";
   // 会話中に AI の呼び出しが止まったら、入力欄の上に知らせる (シナリオ作成中・終了後はそれぞれの画面で出す)
   const banner = $("aierror");
   const showBanner = !!s.ai.error && s.phase === "ai_turn";
   banner.hidden = !showBanner;
   if (showBanner && banner.dataset.msg !== s.ai.error) {
     banner.dataset.msg = s.ai.error!;
-    banner.replaceChildren(aiErrorBox(s) || "");
+    banner.replaceChildren(aiErrorBox(s, true) || "");
   }
   $("title").textContent = s.scenario?.title ?? "";
   renderPremise(s);
@@ -846,9 +878,12 @@ function render() {
   if (!typing.hidden && nearBottom()) scrollDown();
 
   renderSide(s);
-  updateComposer();
+  const turnStarted = updateComposer();
   renderSetup(s);
   renderEnding(s);
+  // 相手が返したら、クリックしなくてもそのまま打ち始められるようにする (考えている間は入力欄を無効にするので、カーソルが外れている)。
+  // 画面のキーボードが届いたばかりの返答を隠す端末と、開始・結果の画面を開いているときは動かさない
+  if (turnStarted && !TOUCH && $("setup").hidden && $("ending").hidden) $("text").focus({ preventScroll: true });
 }
 
 /** MCP 版で、別のゲームのサーバーにつながってしまった場合 (同じポートで別のプログラムが動いているなど) */

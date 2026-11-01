@@ -312,7 +312,7 @@ export const replyShape = {
           .max(200)
           .optional()
           .describe(
-            "to=proposed (プレイヤーの提案) のとき必須。プレイヤーの今回の発言から、具体的な対処案・条件の提示にあたる部分を一字一句そのまま抜き出す (空白は無視して照合される)。発言に無い提案を作って進めることはできない。質問・共感・要約確認・雑談は提案ではない",
+            "to=proposed (プレイヤーの提案) のときと、revealed から to=resolved (案が出たその場で合意する即決) のとき必須。プレイヤーの今回の発言から、具体的な対処案・条件の提示にあたる部分を一字一句そのまま抜き出す (空白は無視して照合される)。発言に無い提案を作って進めることはできない。質問・共感・要約確認・雑談は提案ではない",
           ),
         initiative: z
           .boolean()
@@ -331,7 +331,9 @@ export const replyShape = {
     )
     .max(MAX_CONCERNS)
     .optional()
-    .describe("懸念の進行。1つの懸念は1ターンに1段階だけ動かせる"),
+    .describe(
+      "懸念の進行。1つの懸念は1ターンに1段階だけ動かせる。例外: 本音が見えている懸念 (revealed) は、プレイヤーの今回の案だけで解消条件を満たし、owner がその場で受け入れるなら、検討中を挟まず resolved にできる (quote 必須)。譲れない本音 (importance 9〜10) と歩み寄りは即決できない",
+    ),
   moods: z
     .array(z.object({ character: z.string(), emoji: z.string().min(1).max(8), label: z.string().min(1).max(12) }))
     .max(4)
