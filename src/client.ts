@@ -156,7 +156,15 @@ function renderSide(s: PublicState) {
   $("turnbar").style.width = sc ? `${(left / sc.turnLimit) * 100}%` : "0%";
   $("cast").replaceChildren(
     ...(sc?.characters ?? []).map((c: PublicCharacter) =>
-      h("div", { class: "who" }, h("span", { class: "em" }, c.emoji), h("span", {}, c.name, " ", h("small", {}, c.role)), h("span", { class: "mood" }, `${c.mood.emoji} ${c.mood.label}`)),
+      // 1 段目に名前と気分、2 段目に肩書き (長い肩書きでも、名前の後ろから折り返さない)
+      h(
+        "div",
+        { class: "who" },
+        h("span", { class: "em" }, c.emoji),
+        h("span", { class: "name" }, c.name),
+        h("span", { class: "mood" }, `${c.mood.emoji} ${c.mood.label}`),
+        h("small", { class: "role" }, c.role),
+      ),
     ),
   );
   // 空から始まり、本音が見つかった分だけ増える (総数は見せない)
