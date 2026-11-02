@@ -173,7 +173,8 @@ details.params summary { cursor: pointer; color: var(--accent-ink); font-size: 1
 .dialog h2 { font-size: 20px; color: var(--text); margin: 0; letter-spacing: 0; }
 .dialog p { margin: 0; line-height: 1.7; }
 .dialog textarea { width: 100%; }
-.ideas { display: flex; flex-wrap: wrap; gap: 6px; } .ideas button { font-size: 12px; padding: 3px 10px; border-radius: 999px; }
+.topic { display: grid; gap: 6px; }
+.omakase { font-size: 13px; color: var(--accent-ink); background: #fdf3e0; border: 1px solid #f3dcae; border-radius: 8px; padding: 6px 10px; }
 .actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 .warn { color: var(--warn); font-size: 13px; }
 .spinner { width: 28px; height: 28px; border: 3px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: spin 1s linear infinite; }
