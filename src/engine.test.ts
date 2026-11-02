@@ -5,6 +5,7 @@ import { Engine, stripSelfIntro, type Work } from "./engine.js";
 import { leaksSecret, replySchema, type ReplyInput, type Scenario } from "./scenario.js";
 import { discoverRate, resolveRate, scoreGame } from "./score.js";
 import { DIFFICULTY_PRESETS, PARAM_SPECS, type DifficultyParams, type PresetDifficulty } from "./shared.js";
+import { pickTheme, THEME_CASTS, THEME_SETTINGS, THEME_TOPICS } from "./themes.js";
 
 const scenario = () => ({
   title: "橋の場所",
@@ -98,6 +99,34 @@ test("new_game の依頼が仕事として届き、シナリオ開始で消え�
   assert.equal(e.pendingWork(), null);
   assert.equal(e.phase, "player_turn");
   assert.equal(e.publicState().log[0].text, "橋なら東の浅瀬がよかろう。それで決まりじゃ。");
+});
+
+test("話題が空欄なら、ゲームが選んだお題を渡す (希望があれば渡さない)", () => {
+  const e = new Engine();
+  const newGame = () => e.pendingWork() as Extract<Work, { type: "new_game" }>;
+  e.requestNewGame("  ");
+  const theme = newGame().theme;
+  assert.ok(theme, "お題がある");
+  assert.ok(THEME_SETTINGS[theme.field].includes(theme.setting));
+  assert.ok(THEME_TOPICS.includes(theme.topic));
+  assert.ok(THEME_CASTS.includes(theme.cast));
+  assert.deepEqual(newGame().theme, theme); // 何度 wait しても (作り直しの再試行でも) 同じお題
+  e.requestNewGame("ファンタジー");
+  assert.equal("theme" in newGame(), false);
+  assert.ok(e.startScenario(scenario()).ok);
+  assert.equal(e.pendingWork(), null);
+});
+
+test("お題: 分野は舞台の数によらず等しい確率で選び、どの舞台・話題・顔ぶれも出うる", () => {
+  const fields = Object.keys(THEME_SETTINGS);
+  fields.forEach((f, i) => assert.equal(pickTheme(() => (i + 0.5) / fields.length).field, f));
+  const first = fields[0];
+  assert.deepEqual(pickTheme(() => 0), { field: first, setting: THEME_SETTINGS[first][0], topic: THEME_TOPICS[0], cast: THEME_CASTS[0] });
+  const last = fields[fields.length - 1];
+  assert.deepEqual(pickTheme(() => 0.9999), { field: last, setting: THEME_SETTINGS[last].at(-1), topic: THEME_TOPICS.at(-1), cast: THEME_CASTS.at(-1) });
+  // 同じ舞台が 2 つの分野に入っていない (入っていると、その舞台だけ出やすくなる)
+  const settings = Object.values(THEME_SETTINGS).flat();
+  assert.equal(new Set(settings).size, settings.length);
 });
 
 test("不正なシナリオは理由つきで拒否される", () => {

@@ -22,6 +22,7 @@ import {
 } from "./shared.js";
 import { scoreGame } from "./score.js";
 import { checkScenario, findSteering, findUnsafeOutput, leaksSecret, reviewSchema, scenarioSchema, steeringMessage, unsafeMessage, type ReplyInput, type Scenario } from "./scenario.js";
+import { pickTheme, type Theme } from "./themes.js";
 
 const MAX_LOG = 400;
 const NEUTRAL_MOOD: Mood = { emoji: "😐", label: "ふつう" };
@@ -100,7 +101,7 @@ interface CurrentAction {
 
 /** AI がやるべき仕事。状態から導出するので、何度 wait しても同じものが返る (コンテキストが飛んでも詰まらない) */
 export type Work =
-  | { type: "new_game"; request: string; difficulty: DifficultyBrief }
+  | { type: "new_game"; request: string; /** request が空のときのお題 */ theme?: Theme; difficulty: DifficultyBrief }
   | {
       type: "player_action";
       turn: number;
@@ -192,6 +193,8 @@ export class Engine {
 
   private generating = false;
   private request = "";
+  /** 希望が空欄のときにゲーム側で選んだお題 (AI に任せきりだと、毎回ありがちな舞台に寄る) */
+  private theme: Theme | null = null;
   /** 新しいゲームを頼んだときに選ばれた難易度とパラメータ (やり直しでも変わらない) */
   private difficulty: Difficulty = "normal";
   private params: DifficultyParams = { ...DIFFICULTY_PRESETS.normal };
@@ -249,6 +252,7 @@ export class Engine {
     this.phase = "setup";
     this.generating = true;
     this.request = request.trim().slice(0, 300);
+    this.theme = this.request ? null : pickTheme();
     this.difficulty = difficulty;
     this.params = { ...params };
     this.changed();
@@ -279,6 +283,7 @@ export class Engine {
     this.current = null;
     this.generating = false;
     this.request = "";
+    this.theme = null;
   }
 
   private begin() {
@@ -700,7 +705,8 @@ export class Engine {
 
   /** いま AI がやるべきこと。無ければ null */
   pendingWork(): Work | null {
-    if (this.phase === "setup" && this.generating) return { type: "new_game", request: this.request, difficulty: difficultyBrief(this.difficulty, this.params) };
+    if (this.phase === "setup" && this.generating)
+      return { type: "new_game", request: this.request, ...(this.theme && { theme: this.theme }), difficulty: difficultyBrief(this.difficulty, this.params) };
     if (this.phase === "ai_turn" && this.current && this.scenario) {
       const a = this.current;
       const left = this.turnLimit - a.turn;
