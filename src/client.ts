@@ -278,7 +278,6 @@ $("newgame").addEventListener("click", () => {
 });
 
 // ---- セットアップ (新しいシナリオ) / 終了画面 ---------------------------------------------
-const IDEAS = ["職場の要件すり合わせ", "村の水争いの調停", "宇宙船クルーの方針決め", "引っ越しをめぐる家族会議", "頑固な職人への依頼"];
 
 // ---- AI の接続 (選択・案内・エラー) ---------------------------------------------------
 const MCP_MISSING = "AI が接続されていません。Claude Code で suriawase-simulator (MCP) を接続し、GM として待機してもらってください (README 参照)。";
@@ -551,7 +550,7 @@ function aiSetupDialog(s: PublicState) {
 
 /** (2) どんな話にするかと難易度 */
 function storyDialog(s: PublicState) {
-  const area = h("textarea", { rows: 3, maxlength: 300, placeholder: "例: 小さな町の書店を閉めるかどうかで、店主と話し合う (空欄ならおまかせ)" });
+  const area = h("textarea", { rows: 3, maxlength: 300, placeholder: "例: 小さな町の書店を閉めるかどうかで、店主と話し合う", "aria-label": "話題" });
   const tuned = h("span", { class: "tuned" });
   const showTuned = () => (tuned.textContent = tunedParams ? "パラメータを調整済み" : "");
   // 難易度を選び直したら、微調整は初期値に戻す
@@ -574,9 +573,9 @@ function storyDialog(s: PublicState) {
     { class: "dialog" },
     h("h2", {}, "どんな話にしますか？"),
     h("p", { class: "muted" }, "相手にはまだ言えていない本音があります。聞き出して、お互いが納得できる形にすり合わせましょう。シナリオは AI がその場で作ります。"),
-    area,
+    // 空欄でも始められることは、入力欄の上に目立たせて書く (入力欄の中の例文は、打ち始めると消えてしまう)
+    h("div", { class: "topic" }, h("p", { class: "omakase" }, "💡 ", h("strong", {}, "空欄のまま「はじめる」"), "を押すと、おまかせの話題でシナリオを作ります。"), area),
     h("p", { class: "inputnote" }, "個人情報や機密情報は入力しないでください。話題や会話は、選んだ AI の会社に送られます。"),
-    h("div", { class: "ideas" }, ...IDEAS.map((i) => h("button", { type: "button", onclick: () => ((area.value = i), area.focus()) }, i))),
     h(
       "div",
       { class: "field diff" },
