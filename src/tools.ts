@@ -28,7 +28,8 @@ export const GAME_TOOLS: GameTool[] = [
     name: "start_scenario",
     description: `新しいシナリオを作ってゲームを始める (新しいゲームの依頼 type=new_game が来たとき)。検証エラーがあれば内容を直して再度呼ぶ。
 設計の指針:
-- 舞台は自由 (現実の仕事・家族・地域から、ファンタジー・SF まで)。プレイヤーの request があれば従う。
+- プレイヤーの request があれば従う (舞台は現実の仕事・家族・地域から、ファンタジー・SF まで何でもよい)。
+- request が空のときは、仕事の theme (お題: field 分野・setting 舞台・topic 話題・cast 相手の顔ぶれ) に沿った現代の話にする。お題はきっかけなので、組み合わせがかみ合わなければ自然な形に寄せてよい。店名・地名・人物や細かな事情は自由に決める。
 - 課題は「どちらかが勝つ」ものではなく、双方の事情を理解して落としどころを見つけるもの。
 - 難易度 (仕事の difficulty) に従う。懸念はちょうど difficulty.concerns 個。
 - 各キャラに trust_start (最初の信頼度)・openness (打ち解けやすさ)・understanding (物わかり) を 1〜10 で付ける。persona (人柄) に合わせて人ごとに差をつけ、全員の平均を difficulty.trust_start / difficulty.openness / difficulty.understanding ±1 に収める。

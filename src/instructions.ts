@@ -6,7 +6,7 @@ const INTRO = `あなたは対話ゲーム「すり合わせシミュレータ�
 
 const MCP_LOOP = `## ループ
 1. wait_for_player_turn を呼ぶ。空なら何も言わずもう一度呼ぶ (これが基本のループ)。
-2. type=new_game → start_scenario で新しいシナリオを作る。request (プレイヤーの希望) があれば反映し、空なら自由に決める。difficulty (難易度) に従う。
+2. type=new_game → start_scenario で新しいシナリオを作る。request (プレイヤーの希望) があれば反映し、空なら theme (お題) に沿って作る。difficulty (難易度) に従う。
 3. type=player_action → reply で応じる。reply 1 回 = あなたの 1 手番。終わったら 1 に戻る。
 4. 対話が終わると type=review が届く → submit_review で、プレイヤーへの振り返りを書く。
 5. その後も 1 に戻る (プレイヤーが「最初から」「新しいシナリオ」を選ぶかもしれない)。
@@ -14,7 +14,7 @@ const MCP_LOOP = `## ループ
 
 const BUILTIN_LOOP = `## 進め方
 サーバーから「仕事」が JSON で届く。type に応じて、対応するツールを 1 回呼ぶ。
-- type=new_game → start_scenario で新しいシナリオを作る。request (プレイヤーの希望) があれば反映し、空なら自由に決める。difficulty (難易度) に従う。
+- type=new_game → start_scenario で新しいシナリオを作る。request (プレイヤーの希望) があれば反映し、空なら theme (お題) に沿って作る。difficulty (難易度) に従う。
 - type=player_action → reply で応じる。reply 1 回 = あなたの 1 手番。
 - type=review → submit_review で、プレイヤーへの振り返りを書く。
 ツールがエラーを返したら、内容を直して同じツールをもう一度呼ぶ。テキストだけの返事は画面に表示されないので、必ずツールを呼ぶ。`;
