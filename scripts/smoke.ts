@@ -164,7 +164,7 @@ try {
     turn: 1,
     lines: [{ speaker: "owner", text: "…正直、毎月赤字でね。" }],
     trust_changes: [{ character: "owner", delta: 2, reason: "気遣ってくれた" }],
-    concern_updates: [{ id: "c1", to: "revealed", asked: "お店の調子" }],
+    concern_updates: [{ id: "c1", to: "revealed", asked: "お店の調子", hint: "売上や家計" }],
     moods: [{ character: "owner", emoji: "😔", label: "弱音" }],
   });
   assert.match(String(ok1), /^ok/);

@@ -1,14 +1,14 @@
-// 終了後のスコア。どれだけ重要な本音を、手ごわい相手から引き出し、解決に導いたかで決まる。
+// 終了後のスコア。このゲームの目的は、相手の隠れた本音をあぶり出すこと。重要で引き出しにくい本音を引き出すほど高く、
+// 解決に導くと、さらに解決点が入る (合意までの道筋も評価するが、引き出すほうを重く見る)。
 // 採点はエンジンが行う (AI の判断や言い回しで点が変わらないように)。AI は結果を見て、振り返りでスコアに触れるだけ。
+import { revealDifficulty } from "./difficulty.js";
 import type { Scenario } from "./scenario.js";
 import { MAX_LEVEL, type ConcernStatus, type GameScore, type ScoreRank } from "./shared.js";
 
-/** 引き出し点 = 重要度 × 引き出しの難しさ × これ */
-const DISCOVER_POINTS = 2;
-/** 解決点 = 重要度 × 解決の難しさ × これ (引き出すより、解決に導くほうを重く見る) */
-const RESOLVE_POINTS = 5;
-/** 完全合意のボーナス: 引き出し点と解決点の合計の、この割合 (%) */
-const FULL_AGREEMENT_BONUS = 20;
+/** 引き出し点 = 重要度 × 引き出しにくさの倍率 × これ */
+const DISCOVER_POINTS = 5;
+/** 解決点 = 重要度 × 解決の難しさ × これ (引き出し点より軽く見る。満点のおよそ 3 割) */
+const RESOLVE_POINTS = 2;
 /** ランク: 満点に対する割合 (%) がこれ以上 */
 const RANKS: Array<[ScoreRank, number]> = [
   ["S", 90],
@@ -18,12 +18,8 @@ const RANKS: Array<[ScoreRank, number]> = [
   ["D", 0],
 ];
 
-/**
- * 引き出しの難しさ (%): 打ち解けるまで話してくれない本音ほど高い。
- * 持ち主の最初の信頼度から、本音を話し始める信頼度までの差 1 つにつき +25% (最初から話せる本音は 100%)。
- * 持ち主が打ち解けにくいほど 1 段の重みが増える (打ち解けやすさが 10 から 1 下がるごとに +2%。最も頑な人で +43%)
- */
-export const discoverRate = (minTrust: number, trustStart: number, openness: number) => 100 + Math.max(0, minTrust - trustStart) * (25 + (MAX_LEVEL - openness) * 2);
+/** 引き出しの倍率 (%): 引き出しにくさ (1〜10) が 1 上がるごとに +25% (最初から話せる本音は 100%、最も引き出しにくい本音で 325%) */
+export const discoverRate = (difficulty: number) => 100 + (difficulty - 1) * 25;
 
 /**
  * 解決の難しさ (%): 物わかりが悪く、最初から信頼されていない相手ほど高い。
@@ -37,7 +33,8 @@ const points = (importance: number, per: number, rate: number) => Math.round((im
 export function scoreGame(s: Scenario, statuses: ConcernStatus[]): GameScore {
   const items = s.concerns.map((c, i) => {
     const owner = s.characters.find((ch) => ch.id === c.owner)!;
-    const dRate = discoverRate(c.min_trust, owner.trust_start, owner.openness);
+    const difficulty = revealDifficulty(c.min_trust, owner.trust_start, owner.openness);
+    const dRate = discoverRate(difficulty);
     const rRate = resolveRate(owner.understanding, owner.trust_start);
     const discoverMax = points(c.importance, DISCOVER_POINTS, dRate);
     const resolveMax = points(c.importance, RESOLVE_POINTS, rRate);
@@ -46,6 +43,7 @@ export function scoreGame(s: Scenario, statuses: ConcernStatus[]): GameScore {
     return {
       id: c.id,
       importance: c.importance,
+      revealDifficulty: difficulty,
       discovered,
       resolved,
       discoverRate: dRate,
@@ -55,13 +53,9 @@ export function scoreGame(s: Scenario, statuses: ConcernStatus[]): GameScore {
       maxPoints: discoverMax + resolveMax,
     };
   });
-  const subtotal = items.reduce((n, x) => n + x.discoverPoints + x.resolvePoints, 0);
-  const subtotalMax = items.reduce((n, x) => n + x.maxPoints, 0);
-  const bonusOf = (n: number) => Math.round((n * FULL_AGREEMENT_BONUS) / 100);
-  const bonus = items.every((x) => x.resolved) ? bonusOf(subtotal) : 0;
-  const total = subtotal + bonus;
-  const max = subtotalMax + bonusOf(subtotalMax);
+  const total = items.reduce((n, x) => n + x.discoverPoints + x.resolvePoints, 0);
+  const max = items.reduce((n, x) => n + x.maxPoints, 0);
   const percent = max ? Math.floor((total * 100) / max) : 0;
   const rank = RANKS.find(([, min]) => percent >= min)![0];
-  return { total, max, percent, rank, bonus, items };
+  return { total, max, percent, rank, items };
 }

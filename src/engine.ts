@@ -1,4 +1,4 @@
-import { defaultParams, difficultyBrief, difficultyLabel, isCustomized, opennessNote, trustGainRate, trustName, understandingNote, type DifficultyBrief } from "./difficulty.js";
+import { defaultParams, difficultyBrief, difficultyLabel, isCustomized, opennessNote, probesNeeded, revealDifficulty, trustGainRate, trustName, understandingNote, type DifficultyBrief } from "./difficulty.js";
 import {
   DIFFICULTY_PRESETS,
   MAX_LEVEL,
@@ -62,14 +62,28 @@ const MAX_REPLY_CHARS = 240;
 /** 地の文 (場面転換や時間の経過だけに使う) */
 const MAX_NARRATOR_LINES = 1;
 const MAX_NARRATOR_CHARS = 80;
-/** 1 回の返答で新しく見つかる本音の数 (軽いモデルほど、一般的な質問で本音を次々に出してしまうため) */
-const MAX_REVEALS_PER_REPLY = 1;
+
+// 本音を話す条件は厳密に確かめる (軽いモデルほど、一般的な質問で本音を次々に出してしまうため)。
+// 1 回の返答で見つかる本音の数は縛らない (発言の中身が濃ければ、いくつ出てもよい) 代わりに、本音ごとに
+// 「発言のどの部分が、本音のきっかけ (reveal_hint) のどの話題に触れたか」を引用させて照合し、発言の同じ部分を複数の本音に使わせない
+/** 本音のきっかけ (hint) から除くと、話題そのものが残るか (「尋ねる」「話題」だけでは、どの本音の話題かが分からない) */
+const GENERIC_HINT = /尋ね|たずね|聞[かきくけこい]|訊|触れ|ふれ|話題|話|こと|事情|について|に関して|質問|する|られ|[をにのやとへがはもで]/g;
+const MIN_HINT = 2;
+
+/** 本音のきっかけの照らし合わせ (hint) が、reveal_hint の話題を抜き出しているか。だめなら理由を返す (reveal_hint の中身は書かない。エラーはプレイヤーの画面に出ることがある) */
+function hintError(head: string, revealHint: string, hint: string | undefined): string | null {
+  const h = plain(hint ?? "");
+  if (!h) return `${head}: hint が必要です。その本音の reveal_hint のうち、プレイヤーの今回の発言が触れた話題を、一字一句そのまま抜き出してください。抜き出せないなら、発言はこの本音の話題に触れていないので、本音は話さず、聞かれたことにだけ答えてください`;
+  if (!plain(revealHint).includes(h)) return `${head}: hint がその本音の reveal_hint に見つかりません。言い換えず、reveal_hint からそのまま抜き出してください`;
+  if (h.replace(GENERIC_HINT, "").length < MIN_HINT) return `${head}: hint に話題そのものが入っていません (「尋ねる」「話題」のような言葉だけでは、どの本音の話題か分かりません)。reveal_hint から、発言が触れた話題 (人・物・事柄) を含めて抜き出してください`;
+  return null;
+}
 
 /**
  * 台詞に、ツール引数の JSON の切れ端が混ざっていないか。軽いモデルが引数の組み立てに失敗すると、
  * 「…なんです。」}],moods:[{character: のように、後ろの項目が台詞に流れ込むことがある
  */
-const ARGUMENT_DEBRIS = /[{}[\]]\s*,?\s*"?[A-Za-z_]+"?\s*:|"?\b(?:speaker|text|moods|character|emoji|label|concern_updates|trust_changes|delta|reason|epilogue|note|asked|quote|evidence|initiative|checks|point)\b"?\s*:/;
+const ARGUMENT_DEBRIS = /[{}[\]]\s*,?\s*"?[A-Za-z_]+"?\s*:|"?\b(?:speaker|text|moods|character|emoji|label|concern_updates|trust_changes|delta|reason|epilogue|note|asked|hint|quote|evidence|initiative|checks|point|probes)\b"?\s*:/;
 /** 台詞全体を囲むかぎ括弧は外す (吹き出しで話者が分かるので不要) */
 const unwrapQuotes = (t: string) => (/^「[^「」]*」$/.test(t) ? t.slice(1, -1) : t);
 
@@ -98,6 +112,8 @@ const STEPS: Record<ConcernStatus, ConcernStatus[]> = {
 
 interface ConcernRuntime {
   status: ConcernStatus;
+  /** 未発見のうちに、プレイヤーがその話題に触れたターンの数 (本音を話さなかったターン)。引き出しにくい本音は、これが足りるまで話さない */
+  probes: number;
   /** 見つかった順 (ボードの並び) */
   seq?: number;
   /** 本音が見えた (または案が差し戻された) ターン。歩み寄りの根拠は、これより後のプレイヤーの発言に限る */
@@ -153,6 +169,11 @@ export type Work =
         reveal_hint: string;
         resolved_when: string;
         min_trust: number;
+        /** 引き出しにくさ (1〜10) */
+        reveal_difficulty: number;
+        /** 未発見のうちに話題に触れられたターンの数 / 本音を話すのに要った数 */
+        probes: number;
+        probes_needed: number;
         proposal?: string;
         /** player = プレイヤーの提案 / character = 相手からの歩み寄り */
         proposed_by?: "player" | "character";
@@ -188,6 +209,14 @@ export interface Digest {
     /** owner にとっての重要度 (1〜10)。高いほど、解消の判定を厳しくする。9〜10 が残ったまま終わると持ち帰り */
     importance: number;
     min_trust: number;
+    /** hidden のとき: どんな聞き方・話題で本音が出るか。本音を話すときは、このどの部分に触れたかを hint で示す */
+    reveal_hint?: string;
+    /** hidden のとき: 引き出しにくさ (1〜10)。持ち主が頑なで、打ち解けるまで話さない本音ほど高い */
+    reveal_difficulty?: number;
+    /** hidden のとき: これまでに話題に触れられたターンの数 (本音を話さなかったターン。probes で記録したもの) */
+    probes?: number;
+    /** hidden のとき: 本音を話すのに要る、話題に触れられたターンの数 (今回を含む)。probes + 1 がこれに届くまでは話さない */
+    probes_needed?: number;
     /** revealed のとき: 本音が見えたターン。歩み寄りの根拠にできるのは、これより後のプレイヤーの発言 */
     since_turn?: number;
     /** 歩み寄るのに要る、owner の信頼度 */
@@ -209,7 +238,7 @@ const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n
  * エンジンでは中身までは確かめられない (引用が実在するかまで) ので、直前に思い出させる
  */
 const TURN_CHECKLIST = [
-  "本音 (未発見の懸念) を話すのは、今回のプレイヤーの発言がその話題 (reveal_hint) に触れたときだけ。別の話題への返事や一般的な質問で、自分から打ち明けない (「実は」「本音を言うと」と切り出さない)。",
+  "本音 (未発見の懸念) を話すのは、次のすべてを満たすときだけ: 今回のプレイヤーの発言が、その本音の reveal_hint の話題に具体的に触れている (触れた話題を hint で reveal_hint から抜き出せる) / owner の信頼度が min_trust 以上 / probes + 1 が probes_needed 以上。話題に触れたが信頼度か回数が足りなければ、probes に記録して表向きの事情だけを答える。別の話題への返事や一般的な質問で、自分から打ち明けない (「実は」「本音を言うと」と切り出さない)。",
   "解消 (resolved) にするのは、resolved_when のすべての点について、それを満たしたプレイヤーの発言を checks で示せるときだけ。足りない点があれば、キャラクターの言葉でそう伝える。プレイヤーが言っていない解決策や約束を、キャラクターが自分で足さない。",
   "地の文と epilogue では、結末を言い切らない (「すべての懸念が解消された」「完全な合意が成立した」など)。会話で実際に決まったことだけを書く。",
 ];
@@ -322,8 +351,9 @@ export class Engine {
   private begin() {
     const s = this.scenario!;
     this.resetRuntime();
-    this.turnLimit = turnLimitOf(this.params);
-    this.concerns = s.concerns.map(() => ({ status: "hidden" as const }));
+    this.concerns = s.concerns.map(() => ({ status: "hidden" as const, probes: 0 }));
+    // 引き出しにくい本音は話題に何度も触れる必要がある。その分のターンを足す (本音ごとに、話すまでに要る回数 - 1)
+    this.turnLimit = turnLimitOf(this.params) + s.concerns.reduce((n, _, i) => n + this.probesNeededOf(i) - 1, 0);
     for (const c of s.characters) {
       this.trustPts.set(c.id, c.trust_start * 100);
       this.moods.set(c.id, { ...NEUTRAL_MOOD });
@@ -444,6 +474,8 @@ export class Engine {
 
     const planned: Array<{ index: number; from: ConcernStatus; to: ConcernStatus; note: string; by: "player" | "character" }> = [];
     const seen = new Set<string>();
+    /** 未発見の本音に触れた発言の部分 (本音を話したもの・probes に記録したもの)。同じ部分を複数の本音に使わせない */
+    const touches: Array<{ id: string; quote: string }> = [];
     let initiatives = 0;
     for (const u of r.concern_updates ?? []) {
       const index = s.concerns.findIndex((c) => c.id === u.id);
@@ -470,7 +502,7 @@ export class Engine {
       // 本音を話すか・歩み寄るかは、その本音を持つ人の信頼度で決まる
       const ownerTrust = levelOf(trustAfter.get(c.owner) ?? MIN_LEVEL * 100);
       if (from === "hidden" && ownerTrust < c.min_trust) {
-        errors.push(`懸念 "${u.id}" は、まだ ${c.owner} が本音を話せるほど信頼されていません (${c.owner} の信頼度 ${ownerTrust} < 必要 ${c.min_trust})。本音は出さず、信頼度が上がる聞き方を待ってください`);
+        errors.push(`懸念 "${u.id}" は、まだ ${c.owner} が本音を話せるほど信頼されていません (${c.owner} の信頼度 ${ownerTrust} < 必要 ${c.min_trust})。本音は出さず、信頼度が上がる聞き方を待ってください。今回の発言がその話題に触れているなら、probes に記録して、表向きの事情だけを答えてください`);
         continue;
       }
       // 本音を話すのは、プレイヤーがその話題に触れたときだけ。きっかけになった発言を引用させる (聞かれていない本音を自分から話させない)
@@ -482,6 +514,24 @@ export class Engine {
         }
         if (!squash(action.text).includes(asked)) {
           errors.push(`懸念 "${u.id}" の asked がプレイヤーの今回の発言に見つかりません。言い換えず、発言の該当部分をそのまま引用してください。プレイヤーがその話題に触れていないなら、本音は話さないでください`);
+          continue;
+        }
+      }
+      // 歩み寄りは未発見の本音には使えない (initiativeError が理由を返す)
+      if (from === "hidden" && !u.initiative) {
+        // 発言が、本音のきっかけ (reveal_hint) のどの話題に触れたかを照らし合わせさせる (一般的な質問や別の話題への返事で本音を出させない)
+        const why = hintError(`懸念 "${u.id}"`, c.reveal_hint, u.hint);
+        if (why) {
+          errors.push(why);
+          continue;
+        }
+        // 引き出しにくい本音は、別々のターンで何度か話題に触れられて、はじめて話す
+        const needed = this.probesNeededOf(index);
+        const probes = this.concerns[index].probes;
+        if (probes + 1 < needed) {
+          errors.push(
+            `懸念 "${u.id}" は引き出しにくい本音です。話題に触れられたターンは、今回を含めて ${probes + 1} (話すのに要るのは ${needed})。今回は本音を話さず、probes に { id, asked, hint } を記録して、表向きの事情だけを答えてください (触れられた回数が増えるほど、少しずつ具体的にしてよい。本音そのものはまだ言わない)`,
+          );
           continue;
         }
       }
@@ -531,15 +581,56 @@ export class Engine {
         continue;
       }
       planned.push({ index, from, to: u.to, note, by });
+      // 未発見から進めた本音: 話題に触れた発言の部分 (案が当たったときは、その案)
+      if (from === "hidden") touches.push({ id: u.id, quote: squash((u.to === "revealed" ? u.asked : u.quote) ?? "") });
     }
 
-    // 見つかる本音は 1 回の返答で 1 つまで (提案が当たって未発見からいきなり検討中になる場合も数える)
-    const reveals = planned.filter((p) => p.from === "hidden");
-    if (reveals.length > MAX_REVEALS_PER_REPLY) {
-      errors.push(
-        `1 回の返答で見つけられる本音は ${MAX_REVEALS_PER_REPLY} つまでです (今回 ${reveals.length} つ: ${reveals.map((p) => s.concerns[p.index].id).join(", ")})。プレイヤーの発言にいちばん自然に応える 1 つだけにして、残りは次のターン以降、聞き方に応じて出してください`,
-      );
+    // 話題に触れられたが、まだ本音を話さない (信頼度か、触れられた回数が足りない)。触れられたターンとして数える
+    const probed: number[] = [];
+    for (const p of r.probes ?? []) {
+      const index = s.concerns.findIndex((c) => c.id === p.id);
+      const head = `probes: 懸念 "${p.id}"`;
+      if (index < 0) {
+        errors.push(`${head} は存在しません`);
+        continue;
+      }
+      if (this.concerns[index].status !== "hidden") {
+        errors.push(`${head} は、もう本音が見えています。probes に入れるのは、未発見 (hidden) の本音だけです`);
+        continue;
+      }
+      if (seen.has(p.id)) {
+        errors.push(`${head} は concern_updates でも進めています。本音を話すなら concern_updates だけ、まだ話さないなら probes だけにしてください`);
+        continue;
+      }
+      if (probed.includes(index)) {
+        errors.push(`${head} が重複しています (1 つの本音につき 1 つまで)`);
+        continue;
+      }
+      const asked = squash(p.asked);
+      if (asked.length < MIN_QUOTE || !squash(action.text).includes(asked)) {
+        errors.push(`${head} の asked が、プレイヤーの今回の発言に見つかりません。発言のうち、この本音の話題に触れた部分を一字一句そのまま ${MIN_QUOTE} 文字以上引用してください。触れていないなら probes に入れないでください`);
+        continue;
+      }
+      const why = hintError(head, s.concerns[index].reveal_hint, p.hint);
+      if (why) {
+        errors.push(why);
+        continue;
+      }
+      probed.push(index);
+      touches.push({ id: p.id, quote: asked });
     }
+
+    // 発言の同じ部分を、複数の本音のきっかけにしない (一般的な質問 1 つで、本音をまとめて出させない)。
+    // 発言の中身が濃く、別々の話題に触れていれば、いくつ出てもよい
+    touches.forEach((a, i) => {
+      for (const b of touches.slice(i + 1)) {
+        if (a.quote.includes(b.quote) || b.quote.includes(a.quote)) {
+          errors.push(
+            `懸念 "${a.id}" と "${b.id}" のきっかけ (asked / quote) が、プレイヤーの発言の同じ部分です。発言の 1 つの部分で触れられる本音は 1 つだけ。それぞれの話題に触れた別の部分を引用してください (片方の話題にしか触れていなければ、もう片方は話さず、probes にも入れない)`,
+          );
+        }
+      }
+    });
 
     // この返答で対話が終わるか
     const after = this.concerns.map((c) => c.status);
@@ -590,6 +681,7 @@ export class Engine {
       this.trustPts.set(id, to);
     }
 
+    for (const i of probed) this.concerns[i].probes++;
     // 進行の要約はチャットには出さない (現実の対話では見えないため)。懸念ボードの状態だけが変わる
     for (const p of planned) {
       const rt = this.concerns[p.index];
@@ -695,6 +787,19 @@ export class Engine {
     return Math.max(this.params.initiativeTrust, minTrust + 1);
   }
 
+  /** 本音の引き出しにくさ (1〜10)。持ち主の最初の信頼度・打ち解けやすさと、本音を話し始める信頼度から決まる */
+  private revealDifficultyOf(index: number) {
+    const s = this.scenario!;
+    const c = s.concerns[index];
+    const owner = s.characters.find((ch) => ch.id === c.owner)!;
+    return revealDifficulty(c.min_trust, owner.trust_start, owner.openness);
+  }
+
+  /** 本音を話すのに要る、話題に触れられたターンの数 (本音を話すターンを含む) */
+  private probesNeededOf(index: number) {
+    return probesNeeded(this.revealDifficultyOf(index));
+  }
+
   private initiativeCooldownOk() {
     return this.lastInitiativeTurn === null || this.turn - this.lastInitiativeTurn >= this.params.initiativeCooldown;
   }
@@ -775,6 +880,7 @@ export class Engine {
           status: rt.status,
           importance: c.importance,
           min_trust: c.min_trust,
+          ...(rt.status === "hidden" && { reveal_hint: c.reveal_hint, reveal_difficulty: this.revealDifficultyOf(i), probes: rt.probes, probes_needed: this.probesNeededOf(i) }),
           since_turn: rt.status === "revealed" ? rt.sinceTurn : undefined,
           initiative_trust: this.initiativeTrust(c.min_trust),
         };
@@ -819,7 +925,7 @@ export class Engine {
         type: "review",
         difficulty: this.difficultyName,
         ending: this.ending,
-        note: "対話が終わりました。プレイヤーへの振り返りを submit_review で書いてください。transcript の実際の発言を引いて具体的に。励ましつつ、次に活かせる形で。解消できなかった懸念すべてに、どんな聞き方・どんな案なら届いたかを (reveal_hint / resolved_when を踏まえて) 書くこと。重要度 (importance) の高い本音を優先できたかにも触れる。ending.nonNegotiableLeft が 1 以上なら、譲れない本音が残ったことが持ち帰りの理由。ending.score はエンジンが出したスコアで、プレイヤーにも見えている (重要な本音を、手ごわい相手から引き出し・解決するほど高い)。overall でスコアとランクに一言触れ、どの本音で点を伸ばせたか (score.items で取りこぼした、重要度や難しさの高い本音) を示す。点数は書き換えられない。プレイヤーには信頼度の数値は見えていないので、数値ではなく相手の反応で説明する。concerns[].proposed_by が character の懸念は、プレイヤーの積み重ねで相手から歩み寄ってくれたもの。何が効いたかを具体的に褒める",
+        note: "対話が終わりました。プレイヤーへの振り返りを submit_review で書いてください。transcript の実際の発言を引いて具体的に。励ましつつ、次に活かせる形で。解消できなかった懸念すべてに、どんな聞き方・どんな案なら届いたかを (reveal_hint / resolved_when を踏まえて) 書くこと。重要度 (importance) の高い本音を優先できたかにも触れる。ending.nonNegotiableLeft が 1 以上なら、譲れない本音が残ったことが持ち帰りの理由。ending.score はエンジンが出したスコアで、プレイヤーにも見えている。このゲームの目的は隠れた本音をあぶり出すことで、重要で引き出しにくい (score.items の revealDifficulty が高い) 本音を引き出すほど高く、解決に導くと解決点も入る。overall でスコアとランクに一言触れ、どの本音で点を伸ばせたか (score.items で取りこぼした、重要度や引き出しにくさの高い本音) を示す。点数は書き換えられない。見つけられなかった本音のうち、話題に触れていたもの (concerns[].probes が 1 以上) は、あと何回 (probes_needed まで) 踏み込めば届いたか、信頼度が足りなかったのかを助言に書く。プレイヤーには信頼度の数値は見えていないので、数値ではなく相手の反応で説明する。concerns[].proposed_by が character の懸念は、プレイヤーの積み重ねで相手から歩み寄ってくれたもの。何が効いたかを具体的に褒める",
         transcript: this.log.map((l) => `${name(l)}: ${l.text}`),
         concerns: s.concerns.map((c, i) => ({
           id: c.id,
@@ -831,6 +937,9 @@ export class Engine {
           reveal_hint: c.reveal_hint,
           resolved_when: c.resolved_when,
           min_trust: c.min_trust,
+          reveal_difficulty: this.revealDifficultyOf(i),
+          probes: this.concerns[i].probes,
+          probes_needed: this.probesNeededOf(i),
           proposal: this.concerns[i].proposal,
           proposed_by: this.concerns[i].proposedBy,
           agreement: this.concerns[i].agreement,
@@ -879,6 +988,7 @@ export class Engine {
       concerns: s?.concerns.map((c, i) => ({
         id: c.id,
         status: this.concerns[i].status,
+        probes: this.concerns[i].probes,
         proposal: this.concerns[i].proposal,
         proposed_by: this.concerns[i].proposedBy,
         agreement: this.concerns[i].agreement,

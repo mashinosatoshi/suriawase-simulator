@@ -91,13 +91,15 @@ export type ScoreRank = "S" | "A" | "B" | "C" | "D";
 export interface ScoreItem {
   id: string;
   importance: number;
+  /** 引き出しにくさ (1〜10)。打ち解けるまで話してくれない本音・頑なな人の本音ほど高い。高いほど、話題に何度か触れないと話してくれない */
+  revealDifficulty: number;
   discovered: boolean;
   resolved: boolean;
-  /** 引き出しの難しさ (%)。打ち解けるまで話してくれない本音ほど高い */
+  /** 引き出しの倍率 (%)。引き出しにくい本音ほど高い */
   discoverRate: number;
   /** 解決の難しさ (%)。物わかりが悪く、最初から信頼されていない相手ほど高い */
   resolveRate: number;
-  /** 引き出し点 (重要度 × 引き出しの難しさ)。引き出せなかったら 0 */
+  /** 引き出し点 (重要度 × 引き出しにくさ)。引き出せなかったら 0 */
   discoverPoints: number;
   /** 解決点 (重要度 × 解決の難しさ)。解決できなかったら 0 */
   resolvePoints: number;
@@ -105,16 +107,14 @@ export interface ScoreItem {
   maxPoints: number;
 }
 
-/** どれだけ重要な本音を、手ごわい相手から引き出し、解決に導いたか */
+/** どれだけ重要で引き出しにくい本音を引き出し、解決に導いたか (引き出すほうを重く見る) */
 export interface GameScore {
   total: number;
-  /** このシナリオの満点 (すべて引き出して解決し、完全合意したとき) */
+  /** このシナリオの満点 (すべて引き出して解決したとき) */
   max: number;
   /** 満点に対する割合 (%、切り捨て) */
   percent: number;
   rank: ScoreRank;
-  /** 完全合意のボーナス (完全合意でなければ 0) */
-  bonus: number;
   items: ScoreItem[];
 }
 
@@ -178,7 +178,7 @@ export const PARAM_SPECS: Record<keyof DifficultyParams, { label: string; min: n
   trustStart: { label: "最初の信頼度 (平均)", min: MIN_LEVEL, max: MAX_LEVEL - 1, help: "1〜10 (1〜2 険悪 / 3〜4 警戒 / 5〜6 様子見 / 7〜8 好意的 / 9〜10 信頼)。登場人物ごとに人柄に合わせてばらつき、その平均がこの値になる。冒頭の口調と気分もこれに合わせる" },
   openness: { label: "打ち解けやすさ (平均)", min: MIN_LEVEL, max: MAX_LEVEL, help: "1 = とても頑な 〜 10 = すぐ心を開く。良い発言で信頼度が上がる速さ (頑な人ほど、良いやり取りを何度も重ねないと打ち解けない。下がるときは変わらない)。登場人物ごとにばらつき、その平均がこの値になる" },
   understanding: { label: "物わかり (平均)", min: MIN_LEVEL, max: MAX_LEVEL, help: "1 = 字面どおりにしか受け取らない 〜 10 = 言いたいことを汲み取ってくれる。提案をどこまで汲み取るか、解消の判定の厳しさ。登場人物ごとにばらつき、その平均がこの値になる" },
-  turnsPerConcern: { label: "懸念 1 つあたりのターン数", min: 2, max: 5, help: `ターン数の上限 = 懸念の数 × これ + ${TURN_BASE}` },
+  turnsPerConcern: { label: "懸念 1 つあたりのターン数", min: 2, max: 5, help: `ターン数の上限 = 懸念の数 × これ + ${TURN_BASE}。引き出しにくい本音があると、話題に何度も触れる分だけ増える` },
   initiativeTurns: { label: "歩み寄りに要るターン数", min: 1, max: 4, help: "本音が見えた後、何ターンその話に向き合えば、相手から歩み寄ってくれるか" },
   initiativeTrust: { label: "歩み寄りに要る信頼度", min: MIN_LEVEL, max: MAX_LEVEL, help: "相手から歩み寄るのに要る、その人の信頼度 (1〜10。その本音を話し始める信頼度 + 1 のほうが高ければそちら)" },
   initiativeCooldown: { label: "歩み寄りの間隔", min: 1, max: 4, help: "相手からの歩み寄りは、このターン数に 1 回まで" },

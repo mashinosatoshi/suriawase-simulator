@@ -7,6 +7,7 @@ import {
   DIFFICULTY_PRESETS,
   IMPORTANCE_LEVEL_NAMES,
   levelBand,
+  MAX_LEVEL,
   MIN_LEVEL,
   OPENNESS_LEVEL_NAMES,
   PARAM_SPECS,
@@ -73,6 +74,24 @@ const OPENNESS_TEXT = [
  * 10 × 打ち解けやすさ + 10 (1 = 20% 〜 9 以上 = 100%)。下がるときは縮めない
  */
 export const trustGainRate = (openness: number) => Math.min(100, openness * 10 + 10);
+
+/** 引き出しにくさに足す、持ち主の頑なさ (打ち解けやすさの段階ごと: とても頑な・頑な・ふつう・打ち解けやすい・すぐ心を開く) */
+const GUARD_BY_OPENNESS = [3, 2, 1, 0, 0];
+
+/**
+ * 本音の引き出しにくさ (1〜10)。持ち主の最初の信頼度から、本音を話し始める信頼度 (min_trust) までに上げる段数が 1 つにつき +1、
+ * それに持ち主の頑なさを足す。最初から話せる本音 (段数 0) は 1。スコアの引き出し点と、本音を話すのに要る「探り」の回数を決める
+ */
+export function revealDifficulty(minTrust: number, trustStart: number, openness: number) {
+  const gap = Math.max(0, minTrust - trustStart);
+  return gap ? Math.min(MAX_LEVEL, 1 + gap + GUARD_BY_OPENNESS[levelBand(openness)]) : 1;
+}
+
+/**
+ * 本音を話すのに要る、プレイヤーがその話題に触れたターンの数 (本音を話すターンを含む)。
+ * 引き出しにくさ 1〜3: 1 (触れればすぐ) / 4〜6: 2 / 7〜10: 3。それまでは表向きの事情だけを答える
+ */
+export const probesNeeded = (difficulty: number) => (difficulty <= 3 ? 1 : difficulty <= 6 ? 2 : 3);
 
 /** AI への指示: 物わかりの段階ごとの受け取り方。歩み寄りの条件はエンジンが別に確かめる */
 const UNDERSTANDING_TEXT = [
