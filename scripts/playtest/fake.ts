@@ -32,7 +32,12 @@ const SCENARIO = {
   root_issue: {
     owner: "mayor",
     text: "村の若い担い手が減り、村の暮らしや祭りをこの先も続けられるかが不安だ",
-    linked: ["c1", "c2"],
+    linked: ["c1", "c2", "c3"],
+    cascade: [
+      { id: "c1", how: "担い手の不安が晴れ、村の将来の見通しが立てば、大きな橋にこだわらず、予算内の小さな橋を受け入れられる" },
+      { id: "c2", how: "村の暮らしを続ける手応えがあれば、祭りの行列の道筋が変わることも、受け入れやすくなる" },
+      { id: "c3", how: "村に人が残る見通しがあれば、渡し守の仕事の形が変わることにも、前向きに向き合える" },
+    ],
     awareness: "unaware",
     reach_when: "村の担い手が減っていることと、橋の場所へのこだわりがその不安の表れであることを言い当てる",
   },
@@ -81,7 +86,7 @@ const FAKE_REPORT: JudgeReport = {
   naturalness: 4,
   summary: "作り物の審査です (dry-run)。",
   issues: [{ turn: 1, speaker: "村長", quote: "もう少し聞かせてくれんか", category: "その他", severity: "軽微", reason: "作り物の指摘です (dry-run)。" }],
-  root_issue: { depth: 3, reach: "言い当ての試みなし", comment: "作り物の評価です (dry-run)。" },
+  root_issue: { depth: 3, cascade: 3, reach: "言い当ての試みなし", comment: "作り物の評価です (dry-run)。" },
 };
 class FakeJudgeSession implements ChatSession {
   async next(): Promise<AssistantTurn> {

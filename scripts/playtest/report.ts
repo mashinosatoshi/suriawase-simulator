@@ -37,6 +37,7 @@ export interface GameRecord {
 }
 
 const pad = (n: number) => String(n).padStart(2, "0");
+const avgOf = (xs: number[]) => (xs.length ? (xs.reduce((a, b) => a + b, 0) / xs.length).toFixed(1) : "-");
 const squash = (s: string) => s.replace(/\s+/g, "");
 const roleText = (r: RoleSpec) => `${r.provider} / ${r.model} / effort ${r.effort}`;
 const cell = (s: string) => s.replace(/\|/g, "／").replace(/\n/g, " ");
@@ -68,7 +69,7 @@ function gameMarkdown(g: GameRecord) {
     ...(g.error ? [`- **止まった理由**: ${g.error}`] : []),
     `- 本質的な課題: ${rootText(g)}`,
     g.judge ? `- 審査: 自然さ ${g.judge.naturalness}/5。${g.judge.summary}` : `- 審査: ${g.judgeError ?? "(なし)"}`,
-    ...(g.judge?.root_issue ? [`- 本質の審査: 深さ ${g.judge.root_issue.depth}/5・${g.judge.root_issue.reach}。${g.judge.root_issue.comment}`] : []),
+    ...(g.judge?.root_issue ? [`- 本質の審査: 深さ ${g.judge.root_issue.depth}/5・芋づる式 ${g.judge.root_issue.cascade}/5・${g.judge.root_issue.reach}。${g.judge.root_issue.comment}`] : []),
     "",
     "## 会話",
     "",
@@ -138,19 +139,19 @@ export function writeResults(dir: string, header: string[], games: GameRecord[],
     `- 審査の自然さ (5 段階): 平均 ${avg} (審査できたゲーム ${judged.length})`,
     `- 不自然さの指摘: ${issues.length} 件 (台詞に引用が見つからない指摘 ${issues.filter((x) => !x.found).length} 件)`,
     `- エンジンの差し戻し: ${rejections.length} 回`,
-    `- 本質的な課題: 届いたゲーム ${games.filter((g) => g.root?.status === "reached").length} / ${games.filter((g) => g.ending).length}・審査の深さ (5 段階) 平均 ${rootJudged.length ? (rootJudged.reduce((n, g) => n + g.judge!.root_issue.depth, 0) / rootJudged.length).toFixed(1) : "-"}`,
+    `- 本質的な課題: 届いたゲーム ${games.filter((g) => g.root?.status === "reached").length} / ${games.filter((g) => g.ending).length}・審査の深さ (5 段階) 平均 ${avgOf(rootJudged.map((g) => g.judge!.root_issue.depth))}・芋づる式 (5 段階) 平均 ${avgOf(rootJudged.map((g) => g.judge!.root_issue.cascade))}`,
     "",
     "## 本質的な課題",
     "",
-    "表の本音の奥にある、本人も言葉にできていない根っこ。審査役が、作り込み (深さ) と到達の判定の妥当さを見た。",
+    "表の本音の奥にある、本人も言葉にできていない根っこの原因。審査役が、作り込み (深さ)・解消すると形式的な課題の多くが解消に向かうか (芋づる式)・到達の判定の妥当さを見た。",
     "",
     `| 判定 | ${REACH_VERDICTS.join(" | ")} |`,
     `|---|${REACH_VERDICTS.map(() => "---").join("|")}|`,
     `| ゲーム数 | ${REACH_VERDICTS.map((v) => rootJudged.filter((g) => g.judge!.root_issue.reach === v).length).join(" | ")} |`,
     "",
-    "| ゲーム | 本質的な課題 | 深さ | 到達の判定 | 所見 |",
-    "|---|---|---|---|---|",
-    ...games.map((g) => `| [${pad(g.index)}](game-${pad(g.index)}.md) | ${cell(rootText(g))} | ${g.judge?.root_issue?.depth ?? "-"} | ${g.judge?.root_issue?.reach ?? "-"} | ${cell(g.judge?.root_issue?.comment ?? "")} |`),
+    "| ゲーム | 本質的な課題 | 深さ | 芋づる式 | 到達の判定 | 所見 |",
+    "|---|---|---|---|---|---|",
+    ...games.map((g) => `| [${pad(g.index)}](game-${pad(g.index)}.md) | ${cell(rootText(g))} | ${g.judge?.root_issue?.depth ?? "-"} | ${g.judge?.root_issue?.cascade ?? "-"} | ${g.judge?.root_issue?.reach ?? "-"} | ${cell(g.judge?.root_issue?.comment ?? "")} |`),
     "",
     "## 使用量",
     "",

@@ -188,6 +188,8 @@ function rootCard(s: PublicState, r: PublicRoot) {
     h("div", { class: "top" }, h("span", {}, "💡"), owner && h("span", {}, owner.emoji), h("span", { class: "cat" }, "本質的な課題"), h("span", { class: "st" }, state)),
     h("div", {}, r.text ?? ""),
     linked.length > 0 && h("div", { class: "sub" }, `つながっていた本音: ${linked.join("・")}`),
+    // 答え合わせ: この課題が解消されたら、つながっていた本音がどう解消に向かうか (芋づる式)
+    (r.cascade?.length ?? 0) > 0 && h("div", { class: "sub cascade" }, h("div", {}, "この課題が解消されると:"), ...r.cascade!.map((c) => h("div", {}, `・${s.concerns.find((k) => k.id === c.id)?.category ?? c.id}: ${c.how}`))),
   );
 }
 
@@ -712,16 +714,60 @@ function randomParamsBlock(p: DifficultyParams) {
   );
 }
 
-function agreementMarkdown(s: PublicState) {
+/**
+ * 終了後に「会話を書き出す」でコピーする、1 つのテキスト。結果・スコア・本質的な課題・合意事項と持ち越し (合意書)・振り返りに、会話の全文を添える。
+ * 後から読み返したり、AI に読ませて調べたりできる (見つけられなかった本音や本質的な課題も、終了後なので中身が入る)
+ */
+function exportMarkdown(s: PublicState) {
   const e = s.ending!;
-  const lines = [`# 合意書: ${s.scenario?.title ?? ""}`, "", `結果: ${ENDING_LABELS[e.type].icon} ${ENDING_LABELS[e.type].title} (解消 ${e.resolved}/${e.total}、重要度 ${e.importance.resolved}/${e.importance.total})`, `スコア: ${e.score.total} / ${e.score.max} 点 (ランク ${e.score.rank})`, "", e.epilogue, "", "## 合意事項"];
+  const nameOf = (id?: string) => s.scenario?.characters.find((c) => c.id === id)?.name ?? id ?? "?";
+  const categoryOf = (id: string) => s.concerns.find((c) => c.id === id)?.category ?? id;
   const tag = (c: PublicConcern) => `[${c.category}${c.importance === undefined ? "" : `・重要度 ${c.importance} ${IMPORTANCE_LEVEL_NAMES[levelBand(c.importance)]}`}]`;
+  const advice = new Map((s.review?.concerns ?? []).map((c) => [c.id, c.advice]));
+  const lines = [
+    `# ${s.scenario?.title ?? ""}`,
+    "",
+    `- 難易度: ${DIFFICULTY_INFO[s.difficulty]?.label ?? ""}${s.customized ? " (調整あり)" : ""}`,
+    ...(s.params ? [`- パラメータ: ${(Object.keys(PARAM_SPECS) as Array<keyof DifficultyParams>).map((k) => `${PARAM_SPECS[k].label} ${s.params![k]}`).join(" / ")}`] : []),
+    `- ターン: ${s.turn} / ${s.scenario?.turnLimit ?? "?"}`,
+    `- 結果: ${ENDING_LABELS[e.type].icon} ${ENDING_LABELS[e.type].title} (解消 ${e.resolved}/${e.total}、重要度 ${e.importance.resolved}/${e.importance.total})`,
+    `- スコア: ${e.score.total} / ${e.score.max} 点 (ランク ${e.score.rank})`,
+    "",
+    e.epilogue,
+  ];
+  if (s.root?.text) {
+    const linked = (s.root.linked ?? []).map(categoryOf).join("・");
+    lines.push("", "## 本質的な課題", `- ${s.root.status === "reached" ? "届いた" : "たどり着けなかった"}: ${s.root.text}`, ...(linked ? [`- つながっていた本音: ${linked}`] : []));
+    // この課題が解消されたら、つながっていた本音がどう解消に向かうか (芋づる式)
+    if (s.root.cascade?.length) lines.push("- この課題が解消されると:", ...s.root.cascade.map((c) => `  - ${categoryOf(c.id)}: ${c.how}`));
+  }
+  lines.push("", "## スコアの内訳", `- 本質的な課題: ${e.score.root.points} / ${e.score.root.maxPoints}`);
+  lines.push(...[...e.score.items].sort((x, y) => y.maxPoints - x.maxPoints).map((x) => `- ${categoryOf(x.id)} (重要度 ${x.importance}・引き出しにくさ ${x.revealDifficulty}): ${x.discoverPoints + x.resolvePoints} / ${x.maxPoints} (${x.resolved ? "解決" : x.discovered ? "引き出した" : "見つけられなかった"})`));
   const done = s.concerns.filter((c) => c.status === "resolved");
-  lines.push(...(done.length ? done.map((c) => `- ${tag(c)} ${c.text} → ${c.agreement}`) : ["- (なし)"]));
+  lines.push("", "## 合意事項", ...(done.length ? done.map((c) => `- ${tag(c)} ${c.text} → ${c.agreement}`) : ["- (なし)"]));
   const rest = s.concerns.filter((c) => c.status !== "resolved");
-  if (rest.length) lines.push("", "## 持ち越し", ...rest.map((c) => `- ${tag(c)} ${c.text}${c.missed ? " (本音を聞き出せなかった)" : ""}`));
-  if (s.root?.text) lines.push("", "## 本質的な課題", `- ${s.root.text}${s.root.missed ? " (たどり着けなかった)" : ""}`);
+  if (rest.length) lines.push("", "## 持ち越し", ...rest.map((c) => `- ${tag(c)} ${c.text}${c.missed ? " (本音を聞き出せなかった)" : ""}${advice.get(c.id) ? `\n  - 💡 ${advice.get(c.id)}` : ""}`));
+  if (s.review) lines.push("", "## 振り返り", s.review.overall, ...s.review.good.map((t) => `- 👍 ${t}`), ...s.review.improve.map((t) => `- 🌱 ${t}`));
+  // 会話の全文。ターン番号は、プレイヤーの発言ごとに 1 つ進む (冒頭は 0)
+  let turn = 0;
+  lines.push(
+    "",
+    "## 会話",
+    ...s.log.map((l) => {
+      if (l.from === "player") turn++;
+      const who = l.from === "player" ? `プレイヤー${l.to ? `→${nameOf(l.to)}` : ""}` : l.from === "narrator" ? "地の文" : nameOf(l.speaker);
+      return `- [${turn}] **${who}**: ${l.text.replace(/\n/g, "\n  ")}`;
+    }),
+  );
   return lines.join("\n");
+}
+
+/** 「会話を書き出す」: 会話の全文と結果をクリップボードへ。コピーできなければ、理由を知らせる */
+function copyExport(s: PublicState) {
+  const ok = () => toast("会話の全文と結果をコピーしました");
+  const ng = () => toast("コピーできませんでした。ブラウザの設定で、クリップボードへの書き込みを許可してください");
+  if (!navigator.clipboard) return ng();
+  navigator.clipboard.writeText(exportMarkdown(s)).then(ok, ng);
 }
 
 const sectionTitle = (t: string) => h("h2", { class: "section-title" }, t);
@@ -833,7 +879,7 @@ function renderEnding(s: PublicState) {
         h(
           "div",
           { class: "actions" },
-          h("button", { onclick: () => navigator.clipboard?.writeText(agreementMarkdown(cur)).then(() => toast("合意書をコピーしました")) }, "合意書をコピー"),
+          h("button", { onclick: () => copyExport(state?.ending ? state : cur) }, "会話を書き出す"),
           h("button", { onclick: () => ((endingDismissed = true), render()) }, "会話を読み返す"),
           h("button", { onclick: () => ((endingDismissed = true), post("replay")) }, "同じシナリオでもう一度"),
           h("button", { class: "primary", onclick: () => ((endingDismissed = true), (composeNew = true), render()) }, "新しいシナリオ"),
