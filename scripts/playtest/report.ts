@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { Ending, PublicReview } from "../../src/shared.js";
 import type { Scenario } from "../../src/scenario.js";
 import type { Theme } from "../../src/themes.js";
-import type { Options, RoleSpec } from "./config.js";
+import { rpmOf, type Options, type RoleSpec } from "./config.js";
 import { CATEGORIES, SEVERITIES, type JudgeReport, type TranscriptLine } from "./judge.js";
 import type { Usage } from "./providers.js";
 
@@ -84,6 +84,7 @@ export function apiHeader(o: Options, seconds: number) {
     `- プレイヤー役: ${roleText(o.player)}`,
     `- 審査役: ${o.judge ? roleText(o.judge) : "Claude Code のサブエージェント (試遊の後で審査する)"}`,
     `- 難易度: ${o.difficulty}・ターン: ${o.turns === "mixed" ? "ゲームごとに「上限まで使う」と「途中で締める」を交互に" : o.turns === "full" ? "いつも上限まで使う" : `${o.turns} 発言で締める`}・seed ${o.seed}`,
+    ...(o.dryRun ? [] : [`- 1 分あたりの呼び出しの上限: ${[...new Set([o.gm.provider, o.player.provider, ...(o.judge ? [o.judge.provider] : [])])].map((p) => `${p} ${rpmOf(o, p) || "なし"}`).join("・")}`]),
   ];
 }
 

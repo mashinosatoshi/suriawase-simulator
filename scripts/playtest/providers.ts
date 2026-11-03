@@ -17,14 +17,43 @@ export interface Usage {
 
 export const emptyUsage = (): Usage => ({ calls: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
 
-/** 応答の数を数える (どの提供元でも) */
-function counted(provider: LlmProvider, usage: Usage): LlmProvider {
+/**
+ * 1 分あたりの呼び出し回数を上限より少なく抑える (超えそうなら、空くまで待つ)。
+ * 無料枠の上限 (Gemini の Flash-Lite は 1 分 15 回など) に当たらないようにする。上限はキー (提供元) ごとなので、
+ * GM とプレイヤー役が同じ提供元なら、同じものを共有する
+ */
+export class RateLimiter {
+  private times: number[] = [];
+  constructor(
+    private perWindow: number,
+    private onWait: (ms: number) => void = () => {},
+    private windowMs = 60_000,
+  ) {}
+
+  async take() {
+    for (;;) {
+      const now = Date.now();
+      this.times = this.times.filter((t) => now - t < this.windowMs);
+      if (this.times.length < this.perWindow) {
+        this.times.push(now);
+        return;
+      }
+      const wait = this.windowMs - (now - this.times[0]) + 200;
+      this.onWait(wait);
+      await new Promise((r) => setTimeout(r, wait));
+    }
+  }
+}
+
+/** 応答の数を数え、上限があれば呼び出しの前に待つ (どの提供元でも) */
+function counted(provider: LlmProvider, usage: Usage, limiter: RateLimiter | null): LlmProvider {
   return {
     id: provider.id,
     newSession(options) {
       const session = provider.newSession(options);
       const wrapped: ChatSession = {
         async next(input) {
+          await limiter?.take();
           usage.calls++;
           return session.next(input);
         },
@@ -54,7 +83,7 @@ function anthropicCounted(apiKey: string, spec: RoleSpec, usage: Usage): LlmProv
   return anthropicProvider({ apiKey, effort: spec.effort, client: client as unknown as Pick<Anthropic, "beta"> });
 }
 
-export function makeProvider(spec: RoleSpec, apiKey: string, usage: Usage): LlmProvider {
+export function makeProvider(spec: RoleSpec, apiKey: string, usage: Usage, limiter: RateLimiter | null = null): LlmProvider {
   const base = spec.provider === "anthropic" ? anthropicCounted(apiKey, spec, usage) : createProvider(spec.provider, { apiKey, effort: spec.effort });
-  return counted(base, usage);
+  return counted(base, usage, limiter);
 }

@@ -85,8 +85,8 @@ export class PlayerSim {
 
   /** いまの画面の様子を見て、次の発言を決める。last = これが最後の発言 (締めくくる) */
   async next(s: Omit<PublicState, "ai">, turnsLeft: number, last: boolean): Promise<Utterance> {
+    // 読み終えた位置は、発言が決まってから進める (呼び出しに失敗してやり直すとき、相手の発言を読み飛ばさないように)
     const fresh = s.log.slice(this.seen).filter((l) => l.from !== "player");
-    this.seen = s.log.length;
     const heard = fresh.map((l) => `${speakerName(this.sc, l)}: ${l.text}`).join("\n");
     const board = s.concerns.length ? s.concerns.map((c) => `- [${STATUS_LABELS[c.status]}] ${c.text}`).join("\n") : "- (まだ何も見えていない)";
     const moods = this.sc.characters.map((c) => s.scenario?.characters.find((x) => x.id === c.id)).map((c) => c && `${c.name} ${c.mood.emoji} ${c.mood.label}`).join(" / ");
@@ -105,11 +105,13 @@ export class PlayerSim {
       const args = (call?.input ?? {}) as { text?: unknown; to?: unknown; finish?: unknown };
       const said = typeof args.text === "string" ? args.text.trim() : turn.text.trim();
       if (said) {
+        this.seen = s.log.length;
         const to = typeof args.to === "string" && this.sc.characters.some((c) => c.id === args.to) ? args.to : undefined;
         return { text: said.slice(0, MAX_PLAYER_TEXT), to, finish: this.canFinish && args.finish === true };
       }
       input = { toolResults: this.pending, text: "say ツールで発言してください。" };
     }
+    this.seen = s.log.length;
     return { text: "なるほど。もう少し詳しく聞かせてもらえますか。", finish: false };
   }
 }

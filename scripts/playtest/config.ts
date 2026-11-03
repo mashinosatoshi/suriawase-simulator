@@ -5,6 +5,8 @@
 //   --difficulty normal             easy / normal / hard / random
 //   --max-turns mixed               プレイヤーの発言の打ち切り。mixed = ゲームごとに「ターンの上限まで使う」と「途中で締める」を交互に /
 //                                   full = いつも上限まで / 数 = その数の発言で「締める」
+//   --rpm 14                        1 分あたりの呼び出し回数の上限 (提供元ごと。超えそうなら待つ)。0 = 上限なし。
+//                                   省くと Gemini は 14 回 (無料枠の 15 回より少し少なく)、ほかの提供元は上限なし
 //   --seed 1                        お題・難易度・プレイヤーの性格の選び方 (同じ seed なら同じ条件で回せる)
 //   --out playtest-results/...      結果を書き出すフォルダ
 //   --dry-run                       作り物の AI で仕組みだけ確かめる (API を呼ばない・費用ゼロ)
@@ -28,6 +30,8 @@ export interface Options {
   judge: RoleSpec | null;
   difficulty: Difficulty;
   turns: TurnSetting;
+  /** 1 分あたりの呼び出し回数の上限 (提供元ごと)。null = 提供元ごとの既定 (rpmOf) */
+  rpm: number | null;
   seed: number;
   out: string;
   dryRun: boolean;
@@ -68,6 +72,7 @@ export function parseOptions(argv: string[]): Options {
       difficulty: { type: "string", default: "normal" },
       "max-turns": { type: "string", default: "mixed" },
       seed: { type: "string", default: "1" },
+      rpm: { type: "string" },
       out: { type: "string" },
       "dry-run": { type: "boolean", default: false },
     },
@@ -83,11 +88,15 @@ export function parseOptions(argv: string[]): Options {
     judge: values.judge === "none" ? null : parseRole(values.judge, "judge"),
     difficulty,
     turns: parseTurns(values["max-turns"]),
+    rpm: values.rpm === undefined ? null : values.rpm === "0" ? 0 : positive(values.rpm, "rpm", 1000),
     seed,
     out: values.out ?? `playtest-results/${stamp()}`,
     dryRun: values["dry-run"],
   };
 }
+
+/** 提供元ごとの 1 分あたりの呼び出し回数の上限 (0 = 上限なし)。Gemini の無料枠 (Flash-Lite は 1 分 15 回) に合わせて少し少なくする */
+export const rpmOf = (o: Options, provider: ProviderId) => o.rpm ?? (provider === "gemini" ? 14 : 0);
 
 export const parseTurns = (text: string): TurnSetting => (text === "mixed" || text === "full" ? text : positive(text, "max-turns", 40));
 

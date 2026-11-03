@@ -12,19 +12,50 @@ import { join, resolve } from "node:path";
 import { defaultParams, randomParams } from "../src/difficulty.js";
 import { Engine } from "../src/engine.js";
 import { BuiltinGm } from "../src/gm.js";
-import { ApiKeys, type LlmProvider, type ProviderId } from "../src/llm/index.js";
+import { ApiKeys, describeError, type LlmProvider, type ProviderId } from "../src/llm/index.js";
 import { pickTheme } from "../src/themes.js";
-import { parseOptions, seededRandom, turnPlan, turnPlanText, type Options } from "./playtest/config.js";
+import { parseOptions, rpmOf, seededRandom, turnPlan, turnPlanText, type Options } from "./playtest/config.js";
 import { fakeProvider } from "./playtest/fake.js";
 import { judge, transcriptOf } from "./playtest/judge.js";
 import { askKeys } from "./playtest/keypage.js";
 import { PLAYER_STYLES, PlayerSim } from "./playtest/player.js";
-import { emptyUsage, makeProvider, type Usage } from "./playtest/providers.js";
+import { emptyUsage, makeProvider, RateLimiter, type Usage } from "./playtest/providers.js";
 import { apiHeader, writeResults, type GameRecord, type Rejection } from "./playtest/report.js";
 
 type Role = "gm" | "player" | "judge";
 /** judge = null は審査をしない (あとで Claude Code のサブエージェントが審査する) */
 type Providers = { gm: LlmProvider; player: LlmProvider; judge: LlmProvider | null };
+
+// 利用上限 (429) で止まったら、少し待ってから続ける。各社の無料枠は 1 分あたりの回数・トークン数の上限に当たりやすい
+// (GM とプレイヤー役が休みなく呼ぶため)。待っても続けられなければ、そのゲームは止まったものとして記録する
+const RATE_WAITS_MS = [65_000, 120_000, 180_000];
+const rateLimited = (message: string | null | undefined) => !!message && /\(429\)|利用上限/.test(message);
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** GM の仕事を片付ける。利用上限で止まったら、待ってからやり直す */
+async function settle(gm: BuiltinGm, step: (text: string) => void) {
+  await gm.tick();
+  for (const wait of RATE_WAITS_MS) {
+    if (!rateLimited(gm.status().error)) return;
+    step(`利用上限のため ${wait / 1000} 秒待ってから続けます…`);
+    await sleep(wait);
+    gm.retry();
+    await gm.tick();
+  }
+}
+
+/** プレイヤー役・審査役の呼び出し。利用上限なら、待ってからやり直す */
+async function withRateWaits<T>(fn: () => Promise<T>, step: (text: string) => void): Promise<T> {
+  for (let i = 0; ; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (i >= RATE_WAITS_MS.length || !rateLimited(describeError(err))) throw err;
+      step(`利用上限のため ${RATE_WAITS_MS[i] / 1000} 秒待ってから続けます…`);
+      await sleep(RATE_WAITS_MS[i]);
+    }
+  }
+}
 
 async function playGame(index: number, o: Options, providers: Providers, keys: ApiKeys, rand: () => number): Promise<GameRecord> {
   const theme = pickTheme(rand);
@@ -37,7 +68,8 @@ async function playGame(index: number, o: Options, providers: Providers, keys: A
   const rejections: Rejection[] = [];
   const log = (...a: unknown[]) => {
     const message = a.map(String).join(" ");
-    if (/差し戻し|失敗/.test(message)) rejections.push({ turn: engine.publicState().turn, message });
+    // エンジンの審査で弾かれたものだけを数える (呼び出しの失敗は、止まった理由として別に残る)
+    if (/差し戻し/.test(message)) rejections.push({ turn: engine.publicState().turn, message });
   };
   const gm = new BuiltinGm(engine, () => providers.gm, keys, { provider: o.gm.provider, model: o.gm.model }, () => {}, log);
   const record: GameRecord = { index, title: "(シナリオなし)", theme, style: style.label, turns: turnPlanText(plan), difficulty, scenario: null, transcript: [], ending: null, review: null, rejections, error: null, judge: null, judgeError: null };
@@ -45,7 +77,7 @@ async function playGame(index: number, o: Options, providers: Providers, keys: A
 
   engine.requestNewGame("", difficulty, params, theme);
   step("シナリオを作成中…");
-  await gm.tick();
+  await settle(gm, step);
   const pub = () => engine.publicState();
   let sc = pub().scenario;
   if (gm.status().error || !sc) record.error = gm.status().error ?? "シナリオができませんでした";
@@ -61,13 +93,19 @@ async function playGame(index: number, o: Options, providers: Providers, keys: A
       said++;
       const last = said >= limit;
       step(`ターン ${said}: プレイヤー役が考え中…`);
-      const u = await player.next(pub(), limit - said, last);
+      let u;
+      try {
+        u = await withRateWaits(() => player.next(pub(), limit - said, last), step);
+      } catch (err) {
+        record.error = `プレイヤー役の呼び出しに失敗: ${describeError(err)}`;
+        break;
+      }
       const defer = !full && (last || u.finish);
       const refused = engine.act({ text: u.text, to: u.to }, defer);
       // 発言が受け付けられなかった (キーらしい文字列を含む等) ときは、無難な一言で続ける
       if (refused) engine.act({ text: "なるほど。もう少し聞かせてください。" }, defer);
       step(`ターン ${said}: GM が考え中…`);
-      await gm.tick();
+      await settle(gm, step);
       if (gm.status().error) {
         record.error = gm.status().error;
         break;
@@ -89,9 +127,12 @@ async function playGame(index: number, o: Options, providers: Providers, keys: A
   else if (state.scenario && record.transcript.some((l) => l.from !== "player")) {
     step("審査役が会話を読んでいます…");
     try {
-      record.judge = await judge(providers.judge, o.judge.model, state.scenario, record.transcript);
+      const judgeProvider = providers.judge;
+      const judgeModel = o.judge.model;
+      const sc = state.scenario;
+      record.judge = await withRateWaits(() => judge(judgeProvider, judgeModel, sc, record.transcript), step);
     } catch (err) {
-      record.judgeError = err instanceof Error ? err.message : String(err);
+      record.judgeError = describeError(err);
     }
   }
   const result = record.error ? `止まりました: ${record.error.slice(0, 80)}` : `${record.ending?.type ?? "-"}・指摘 ${record.judge?.issues.length ?? "-"} 件・自然さ ${record.judge?.naturalness ?? "-"}/5`;
@@ -111,9 +152,13 @@ async function main() {
   } else {
     const needed = [...new Set<ProviderId>([o.gm.provider, o.player.provider, ...(o.judge ? [o.judge.provider] : [])])];
     keys = await askKeys(needed);
+    // 1 分あたりの上限は、キー (提供元) ごと。同じ提供元の役どうしで共有する
+    const limiters = new Map(
+      needed.filter((p) => rpmOf(o, p) > 0).map((p) => [p, new RateLimiter(rpmOf(o, p), (ms) => process.stdout.write(`\r  1 分あたりの上限 (${p} ${rpmOf(o, p)} 回) に合わせて ${Math.ceil(ms / 1000)} 秒待っています…`.padEnd(60)))]),
+    );
     const make = (role: Role) => {
       const spec = o[role]!;
-      return makeProvider(spec, keys.get(spec.provider)!, usage[role]);
+      return makeProvider(spec, keys.get(spec.provider)!, usage[role], limiters.get(spec.provider) ?? null);
     };
     providers = { gm: make("gm"), player: make("player"), judge: o.judge && make("judge") };
   }
