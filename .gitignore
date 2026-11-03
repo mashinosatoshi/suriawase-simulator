@@ -3,3 +3,4 @@ public/client.js
 public/client.js.map
 .env
 dist/
+playtest-results/

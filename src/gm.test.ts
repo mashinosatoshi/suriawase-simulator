@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { Engine } from "./engine.js";
-import { BuiltinGm, MAX_ATTEMPTS, type Selection } from "./gm.js";
+import { BuiltinGm, LAST_TRY_NOTE, MAX_ATTEMPTS, type Selection } from "./gm.js";
 import { ApiKeys, type AssistantTurn, type ChatSession, type LlmProvider, type ProviderId, type SessionOptions, type TurnInput } from "./llm/index.js";
 
 const scenario = {
@@ -165,6 +165,32 @@ test(`${MAX_ATTEMPTS} 回失敗したら止まって画面に知らせ、再試�
   assert.equal(engine.phase, "player_turn");
   assert.equal(gm.status().error, null);
   assert.equal(s.inputs[MAX_ATTEMPTS].toolResults?.[0].isError, true);
+});
+
+test("返答の差し戻しが続いたら、最後の試行では懸念を進めずに台詞だけで返させる (対話を止めない)", async () => {
+  // プレイヤーが言っていない提案で、未発見の懸念を進めようとし続ける
+  const stuck = () => call("reply", { turn: 1, lines: [{ speaker: "mayor", text: "ふむ。" }], concern_updates: [{ id: "c2", to: "proposed", note: "祭りの道", quote: "言っていない提案" }] });
+  const { engine, provider, gm } = setup([[() => call("start_scenario", scenario), ...Array(MAX_ATTEMPTS - 1).fill(stuck), () => reply(1)]]);
+  engine.requestNewGame("");
+  await gm.tick();
+  engine.act({ text: "こんにちは" });
+  await gm.tick();
+  assert.equal(engine.phase, "player_turn");
+  assert.equal(gm.status().error, null);
+  // 入力は [0] 新しいゲーム、[1] 返答の 1 回目 … [MAX_ATTEMPTS] 返答の最後の試行。案内が付くのは最後の試行だけ
+  const inputs = provider.sessions[0].inputs;
+  assert.equal(inputs.length, MAX_ATTEMPTS + 1);
+  assert.equal(inputs[MAX_ATTEMPTS].text, LAST_TRY_NOTE);
+  assert.ok(inputs.slice(2, MAX_ATTEMPTS).every((i) => !i.text));
+});
+
+test("シナリオ作りの差し戻しには、台詞だけで返す案内を付けない", async () => {
+  const bad = () => call("start_scenario", { title: "x" });
+  const { engine, provider, gm } = setup([[...Array(MAX_ATTEMPTS - 1).fill(bad), () => call("start_scenario", scenario)]]);
+  engine.requestNewGame("");
+  await gm.tick();
+  assert.equal(engine.phase, "player_turn");
+  assert.ok(provider.sessions[0].inputs.every((i) => i.text !== LAST_TRY_NOTE));
 });
 
 test("API のエラー (キーが無効など) は分かる言葉で出し、返すべきツール結果は持ち越す", async () => {
