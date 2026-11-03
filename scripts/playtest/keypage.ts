@@ -12,7 +12,9 @@ const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)
 const HEADERS = {
   "Content-Type": "text/html; charset=utf-8",
   "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
-  "Referrer-Policy": "no-referrer",
+  // no-referrer にすると、ブラウザはフォームの送信に Origin: null を付ける (送信元を確かめられず、受け付けられない)。
+  // 同じ画面の中でだけ送信元を付ける same-origin にする (外のサイトへは何も送らない)
+  "Referrer-Policy": "same-origin",
   "X-Content-Type-Options": "nosniff",
   "Cache-Control": "no-store",
 };
@@ -54,8 +56,8 @@ async function readForm(req: IncomingMessage) {
   return new URLSearchParams(s);
 }
 
-/** 入力画面を開き、すべての提供元のキーが確かめられるまで待つ */
-export function askKeys(providers: ProviderId[]): Promise<ApiKeys> {
+/** 入力画面を開き、すべての提供元のキーが確かめられるまで待つ。open = false はブラウザを開かない (アドレスを出すだけ) */
+export function askKeys(providers: ProviderId[], open = true): Promise<ApiKeys> {
   const token = randomBytes(16).toString("hex");
   const keys = new ApiKeys();
   return new Promise((resolve, reject) => {
@@ -95,7 +97,7 @@ export function askKeys(providers: ProviderId[]): Promise<ApiKeys> {
     server.listen(0, "127.0.0.1", () => {
       const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/${token}`;
       console.log(`API キーの入力画面を開きます。開かなければ、このアドレスをブラウザで開いてください:\n  ${url}`);
-      openBrowser(url);
+      if (open) openBrowser(url);
     });
   });
 }
