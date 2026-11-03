@@ -183,7 +183,7 @@ export type Work =
         agreement?: string;
       }>;
       /** 本質的な課題と、届いたか (届いていなければ、どの本音をつなげば届いたかを振り返りに書く) */
-      root_issue: { owner: string; text: string; awareness: "unaware" | "unspoken"; reach_when: string; linked: string[]; clues_found: number; clues_needed: number; reached: boolean; note?: string };
+      root_issue: { owner: string; text: string; awareness: "unaware" | "unspoken"; reach_when: string; linked: string[]; cascade: Array<{ id: string; how: string }>; clues_found: number; clues_needed: number; reached: boolean; note?: string };
       /** 登場人物ごとの信頼度 (最初と最後) と物わかり */
       characters: Array<{ id: string; name: string; trust_start: number; trust_end: number; openness: number; understanding: number }>;
       trust_history: TrustChange[];
@@ -237,6 +237,8 @@ export interface Digest {
     awareness: "unaware" | "unspoken";
     reach_when: string;
     linked: string[];
+    /** この課題が解消されたら、つながる本音がそれぞれどう解消に向かうか。届いた後、プレイヤーが本質への手当てを示したときの手がかり */
+    cascade: Array<{ id: string; how: string }>;
     /** つながる本音のうち、見つかっている数 (この返答より前) */
     clues_found: number;
     /** 言い当てに要る、見つかっている、つながる本音の数 */
@@ -972,6 +974,7 @@ export class Engine {
         awareness: s.root_issue.awareness,
         reach_when: s.root_issue.reach_when,
         linked: s.root_issue.linked,
+        cascade: s.root_issue.cascade,
         clues_found: this.rootCluesFound(),
         clues_needed: this.params.rootClues,
         reached: this.root.reached,
@@ -1016,7 +1019,7 @@ export class Engine {
         type: "review",
         difficulty: this.difficultyName,
         ending: this.ending,
-        note: "対話が終わりました。プレイヤーへの振り返りを submit_review で書いてください。transcript の実際の発言を引いて具体的に。励ましつつ、次に活かせる形で。解消できなかった懸念すべてに、どんな聞き方・どんな案なら届いたかを (reveal_hint / resolved_when を踏まえて) 書くこと。重要度 (importance) の高い本音を優先できたかにも触れる。ending.nonNegotiableLeft が 1 以上なら、譲れない本音が残ったことが持ち帰りの理由。ending.score はエンジンが出したスコアで、プレイヤーにも見えている。このゲームの目的は隠れた本音をあぶり出すことで、重要で引き出しにくい (score.items の revealDifficulty が高い) 本音を引き出すほど高く、解決に導くと解決点も入る。overall でスコアとランクに一言触れ、どの本音で点を伸ばせたか (score.items で取りこぼした、重要度や引き出しにくさの高い本音) を示す。点数は書き換えられない。見つけられなかった本音のうち、話題に触れていたもの (concerns[].probes が 1 以上) は、あと何回 (probes_needed まで) 踏み込めば届いたか、信頼度が足りなかったのかを助言に書く。本質的な課題 (root_issue) は、表の本音の奥にある、本人も言葉にできていなかった課題で、スコアの 4 分の 1 を占める。届いた (reached) なら、どの発言で点と点をつなげたかを具体的に褒める。届かなかったなら、overall か improve で必ず触れ、どの本音 (linked) を見比べれば、どんな仮説にたどり着けたかを書く (終了後なので中身に触れてよい)。プレイヤーには信頼度の数値は見えていないので、数値ではなく相手の反応で説明する。concerns[].proposed_by が character の懸念は、プレイヤーの積み重ねで相手から歩み寄ってくれたもの。何が効いたかを具体的に褒める",
+        note: "対話が終わりました。プレイヤーへの振り返りを submit_review で書いてください。transcript の実際の発言を引いて具体的に。励ましつつ、次に活かせる形で。解消できなかった懸念すべてに、どんな聞き方・どんな案なら届いたかを (reveal_hint / resolved_when を踏まえて) 書くこと。重要度 (importance) の高い本音を優先できたかにも触れる。ending.nonNegotiableLeft が 1 以上なら、譲れない本音が残ったことが持ち帰りの理由。ending.score はエンジンが出したスコアで、プレイヤーにも見えている。このゲームの目的は隠れた本音をあぶり出すことで、重要で引き出しにくい (score.items の revealDifficulty が高い) 本音を引き出すほど高く、解決に導くと解決点も入る。overall でスコアとランクに一言触れ、どの本音で点を伸ばせたか (score.items で取りこぼした、重要度や引き出しにくさの高い本音) を示す。点数は書き換えられない。見つけられなかった本音のうち、話題に触れていたもの (concerns[].probes が 1 以上) は、あと何回 (probes_needed まで) 踏み込めば届いたか、信頼度が足りなかったのかを助言に書く。本質的な課題 (root_issue) は、表の本音の奥にある、本人も言葉にできていなかった根っこの原因で、解消すると形式的な課題の多くが芋づる式に解消に向かう (root_issue.cascade)。スコアの 4 分の 1 を占める。届いた (reached) なら、どの発言で点と点をつなげたかを具体的に褒める。届かなかったなら、overall か improve で必ず触れ、どの本音 (linked) を見比べれば、どんな仮説にたどり着けたかを書く (終了後なので中身に触れてよい)。どちらでも、この課題に手当てすれば、見つけられなかった本音や解消できなかった本音もどう解消に向かったか (cascade) を、助言に活かす。プレイヤーには信頼度の数値は見えていないので、数値ではなく相手の反応で説明する。concerns[].proposed_by が character の懸念は、プレイヤーの積み重ねで相手から歩み寄ってくれたもの。何が効いたかを具体的に褒める",
         transcript: this.log.map((l) => `${name(l)}: ${l.text}`),
         concerns: s.concerns.map((c, i) => ({
           id: c.id,
@@ -1147,6 +1150,6 @@ export class Engine {
   private publicRoot(s: Scenario, ended: boolean): PublicRoot | null {
     const r = s.root_issue;
     if (!this.root.reached && !ended) return null;
-    return { status: this.root.reached ? "reached" : "hidden", owner: r.owner, text: r.text, ...(ended && { linked: r.linked }), ...(ended && !this.root.reached && { missed: true }) };
+    return { status: this.root.reached ? "reached" : "hidden", owner: r.owner, text: r.text, ...(ended && { linked: r.linked, cascade: r.cascade }), ...(ended && !this.root.reached && { missed: true }) };
   }
 }

@@ -188,6 +188,8 @@ function rootCard(s: PublicState, r: PublicRoot) {
     h("div", { class: "top" }, h("span", {}, "💡"), owner && h("span", {}, owner.emoji), h("span", { class: "cat" }, "本質的な課題"), h("span", { class: "st" }, state)),
     h("div", {}, r.text ?? ""),
     linked.length > 0 && h("div", { class: "sub" }, `つながっていた本音: ${linked.join("・")}`),
+    // 答え合わせ: この課題が解消されたら、つながっていた本音がどう解消に向かうか (芋づる式)
+    (r.cascade?.length ?? 0) > 0 && h("div", { class: "sub cascade" }, h("div", {}, "この課題が解消されると:"), ...r.cascade!.map((c) => h("div", {}, `・${s.concerns.find((k) => k.id === c.id)?.category ?? c.id}: ${c.how}`))),
   );
 }
 
@@ -736,6 +738,8 @@ function exportMarkdown(s: PublicState) {
   if (s.root?.text) {
     const linked = (s.root.linked ?? []).map(categoryOf).join("・");
     lines.push("", "## 本質的な課題", `- ${s.root.status === "reached" ? "届いた" : "たどり着けなかった"}: ${s.root.text}`, ...(linked ? [`- つながっていた本音: ${linked}`] : []));
+    // この課題が解消されたら、つながっていた本音がどう解消に向かうか (芋づる式)
+    if (s.root.cascade?.length) lines.push("- この課題が解消されると:", ...s.root.cascade.map((c) => `  - ${categoryOf(c.id)}: ${c.how}`));
   }
   lines.push("", "## スコアの内訳", `- 本質的な課題: ${e.score.root.points} / ${e.score.root.maxPoints}`);
   lines.push(...[...e.score.items].sort((x, y) => y.maxPoints - x.maxPoints).map((x) => `- ${categoryOf(x.id)} (重要度 ${x.importance}・引き出しにくさ ${x.revealDifficulty}): ${x.discoverPoints + x.resolvePoints} / ${x.maxPoints} (${x.resolved ? "解決" : x.discovered ? "引き出した" : "見つけられなかった"})`));
