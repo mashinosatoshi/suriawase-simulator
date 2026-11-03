@@ -1392,9 +1392,9 @@ function cluesFound(found = ["c1", "c3"]) {
   return e;
 }
 
-test("本質的な課題: ゲーム中は枠だけ (中身も持ち主も送らない) / AI には毎ターン渡る / 終了後は答え合わせとして公開する", () => {
+test("本質的な課題: ゲーム中は届くまで何も送らない (課題があること自体、見せない) / AI には毎ターン渡る / 終了後は答え合わせとして公開する", () => {
   const e = playing("こんにちは");
-  assert.deepEqual(e.publicState().root, { status: "hidden" });
+  assert.equal(e.publicState().root, null);
   assert.ok(!JSON.stringify(e.publicState()).includes("担い手"));
   assert.deepEqual(work(e).digest.root, {
     owner: "mayor",
@@ -1432,7 +1432,7 @@ test("本質的な課題: 手がかり (つながる本音) をそろえたう�
   assert.match(reach({ checks: [{ point: "将来が不安", quote: "一番の心配" }] }), /point「将来が不安」が到達の条件の中に見つかりません/);
   assert.doesNotMatch(reach({ checks: [REACH.checks[0]] }), /担い手/); // エラーに到達の条件の中身は書かない (画面に出ることがある)
   assert.match(reach({}, [line("ferry", "ふん。")]), /owner \(mayor\) が台詞で応じてください/); // 届いたら、本質を抱えていた人が応じる
-  assert.equal(e.publicState().root?.status, "hidden"); // どれも反映されない
+  assert.equal(e.publicState().root, null); // どれも反映されない
 
   must(e.reply({ turn: 3, lines: [realize], root_reach: REACH }));
   assert.deepEqual(e.publicState().root, { status: "reached", owner: "mayor", text: "村の若い担い手が減り、村の暮らしや祭りをこの先も続けられるかが不安だ" });

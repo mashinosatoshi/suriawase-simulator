@@ -59,7 +59,7 @@ export interface PublicConcern {
 
 /**
  * 本質的な課題: 本人も言葉にできていない、いくつもの本音の根っこ。質問しても出てこず、プレイヤーが仮説として言い当てたときだけ開く。
- * ゲーム中、まだ届いていなければ中身は送らない (ボードには枠だけを出す)
+ * ゲーム中は、届くまで送らない (null。そういう課題があること自体、見せない)。届いた後と、終了後の答え合わせで送る
  */
 export interface PublicRoot {
   status: "hidden" | "reached";
@@ -294,7 +294,7 @@ export interface PublicState {
   turn: number;
   // 信頼度は隠し状態。現実の対話と同じく数値では見せず、キャラクターの気分 (mood) や口調でだけ伝わる
   concerns: PublicConcern[];
-  /** シナリオが無いときは null */
+  /** シナリオが無いとき、ゲーム中でまだ届いていないときは null */
   root: PublicRoot | null;
   log: LogLine[];
   ending: Ending | null;

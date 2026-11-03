@@ -168,7 +168,7 @@ function renderSide(s: PublicState) {
       ),
     ),
   );
-  // 本質的な課題の枠は最初から出す (目標として見える)。本音は空から始まり、見つかった分だけ増える (総数は見せない)
+  // 本質的な課題は、届くまで出さない (そういう課題があること自体、見せない)。本音は空から始まり、見つかった分だけ増える (総数は見せない)
   $("board").replaceChildren(
     ...(s.root ? [rootCard(s, s.root)] : []),
     ...(s.concerns.length ? s.concerns.map((c) => concernCard(s, c)) : [h("div", { class: "empty" }, "まだ何も見えていません。相手の話を聞いてみましょう。")]),
@@ -176,8 +176,7 @@ function renderSide(s: PublicState) {
 }
 
 /**
- * 本質的な課題のカード。届くまでは中身の無い枠だけ (どの本音がつながるかも出さない)。
- * 終了後は、届かなくても中身と、つながっていた本音を答え合わせとして出す
+ * 本質的な課題のカード。届いたとき (ボードの先頭) と、終了後の答え合わせ (届かなくても、中身とつながっていた本音を出す) にだけ出す
  */
 function rootCard(s: PublicState, r: PublicRoot) {
   const owner = r.owner ? charOf(s, r.owner) : undefined;
@@ -187,7 +186,7 @@ function rootCard(s: PublicState, r: PublicRoot) {
     "div",
     { class: `concern root ${r.status}${r.missed ? " missed" : ""}` },
     h("div", { class: "top" }, h("span", {}, "💡"), owner && h("span", {}, owner.emoji), h("span", { class: "cat" }, "本質的な課題"), h("span", { class: "st" }, state)),
-    h("div", {}, r.text ?? "本人も言葉にできていない、いくつもの本音の根っこ。見つけた本音どうしを見比べて、その奥にあるものを言い当ててみましょう。"),
+    h("div", {}, r.text ?? ""),
     linked.length > 0 && h("div", { class: "sub" }, `つながっていた本音: ${linked.join("・")}`),
   );
 }

@@ -1134,10 +1134,10 @@ export class Engine {
     };
   }
 
-  /** 本質的な課題: ゲーム中、届いていなければ枠だけ (中身も持ち主も送らない)。終了後は、届かなくても答え合わせとして公開する */
-  private publicRoot(s: Scenario, ended: boolean): PublicRoot {
+  /** 本質的な課題: ゲーム中は、届くまで何も送らない (そういう課題があること自体、見せない)。終了後は、届かなくても答え合わせとして公開する */
+  private publicRoot(s: Scenario, ended: boolean): PublicRoot | null {
     const r = s.root_issue;
-    if (!this.root.reached && !ended) return { status: "hidden" };
+    if (!this.root.reached && !ended) return null;
     return { status: this.root.reached ? "reached" : "hidden", owner: r.owner, text: r.text, ...(ended && { linked: r.linked }), ...(ended && !this.root.reached && { missed: true }) };
   }
 }

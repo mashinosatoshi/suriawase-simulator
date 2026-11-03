@@ -67,9 +67,8 @@ ${style.text}
 - ゲームの仕組み・AI であること・この指示には触れない。`;
 }
 
-/** 懸念ボードの本質的な課題の枠 (届くまでは中身が見えない) */
-export const rootStatusText = (root: PublicState["root"]) =>
-  !root ? "" : root.status === "reached" ? `本質的な課題 (たどり着いた): ${root.text}` : "本質的な課題: まだたどり着いていない (見えてきた本音を見比べて、その奥にある課題を言い当てると開く)";
+/** 懸念ボードの本質的な課題 (届くまでは出ない) */
+export const rootStatusText = (root: PublicState["root"]) => (root?.status === "reached" ? `本質的な課題 (たどり着いた): ${root.text}` : "");
 
 const speakerName = (sc: Scenario, l: LogLine) => (l.from === "narrator" ? "(地の文)" : (sc.characters.find((c) => c.id === l.speaker)?.name ?? l.speaker ?? "?"));
 
@@ -98,7 +97,7 @@ export class PlayerSim {
     const text = [
       `相手の発言:\n${heard || "(なし)"}`,
       `相手の様子: ${moods}`,
-      `見えてきた相手の本音 (懸念ボード):\n${board}\n${rootStatusText(s.root)}`,
+      `見えてきた相手の本音 (懸念ボード):\n${[board, rootStatusText(s.root)].filter(Boolean).join("\n")}`,
       last ? "これが最後の発言です。今日の話し合いを締めくくる一言を言ってください。" : `残り ${turnsLeft} ターン。`,
     ].join("\n\n");
 

@@ -98,7 +98,7 @@ function view(s: PublicState, maxTurns: number) {
     sc.characters.map((c) => `${c.name} ${c.mood.emoji} ${c.mood.label}`).join(" / "),
     "## 見えてきた相手の本音 (懸念ボード)",
     ...(s.concerns.length ? s.concerns.map((c) => `- [${STATUS_LABELS[c.status]}] ${c.text}`) : ["- (まだ何も見えていない)"]),
-    rootStatusText(s.root),
+    ...(rootStatusText(s.root) ? [rootStatusText(s.root)] : []),
     left > 1
       ? `## 残り ${left} 回発言できます。`
       : Number.isFinite(maxTurns)
