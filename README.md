@@ -199,8 +199,8 @@ Claude Code では `/playtest [ゲーム数] [難易度] [GM] [プレイヤー�
 - 結果は `playtest-results/<日時>/` に書き出す。`report.md` がまとめ (不自然さの種類ごとの件数・実例・使用量)、`game-NN.md` がゲームごとの会話と指摘。
 - `--seed` が同じなら、同じお題・性格・難易度で回る。指示文やルールを直す前と後で同じ条件を回し、指摘の件数を比べる。
 - ターンは既定で、偶数番目のゲームは上限まで使い (プレイヤー役は自分から締めない)、奇数番目は 4〜10 回目のどこかで締める (`--max-turns full` で常に上限まで、`--max-turns 10` で常に 10 回で締める)。
-- 無料枠の 1 分あたりの上限に当たらないよう、Gemini は既定で 1 分 14 回までに呼び出しを抑える (超えそうなら待つ。`--rpm` で変えられる)。それでも上限 (429) に当たったら、少し待ってから続ける。
-- そのほかの引数 (`--difficulty`・`--player`・`--judge none`・`--rpm`・`--out`) は [scripts/playtest/config.ts](scripts/playtest/config.ts) を参照。
+- 無料枠の 1 分あたりの上限に当たらないよう、Gemini は既定で 1 分 14 回・225,000 トークンまでに呼び出しを抑える (超えそうなら待つ。`--rpm`・`--tpm` で変えられる)。それでも上限 (429) に当たったら、少し待ってから続ける。
+- そのほかの引数 (`--difficulty`・`--player`・`--judge none`・`--rpm`・`--tpm`・`--out`) は [scripts/playtest/config.ts](scripts/playtest/config.ts) を参照。
 
 ## ライセンス
 

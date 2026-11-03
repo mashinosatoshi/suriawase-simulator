@@ -704,6 +704,15 @@ test("毎ターン、各キャラクターの口調の手本が AI に渡る", (
   assert.ok(!json.includes("一人称は") && !json.includes("費用のことは気になるわい"));
 });
 
+test("毎ターン、破られやすい決まり (聞かれていない本音・甘い解消) の確認事項が AI に渡る", () => {
+  const e = playing("こんにちは");
+  const { checklist } = work(e);
+  assert.equal(checklist.length, 2);
+  assert.match(checklist[0], /reveal_hint/);
+  assert.match(checklist[1], /resolved_when/);
+  assert.match(checklist[1], /自分で足さない/);
+});
+
 // ---- 相手からの歩み寄り (initiative) ------------------------------------------------
 
 const T2 = "大きな橋は村の負担が重いですよね。お祭りの行列も、道が変わると困りますよね。";

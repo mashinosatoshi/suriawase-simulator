@@ -117,6 +117,8 @@ export type Work =
       digest: Digest;
       /** 口調の手本。毎ターン渡して、日本語と口調がぶれないようにする */
       voices: Array<{ id: string; name: string; speech: string; sample_lines: string[] }>;
+      /** 毎ターンの確認事項 (指示文の決まりのうち、軽いモデルが破りやすいもの。自動の試遊で見つかった) */
+      checklist: string[];
     }
   | {
       type: "review";
@@ -184,6 +186,16 @@ const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n
  * 信頼度は 100 倍の整数で持つ (打ち解けやすさで縮めた上がり幅を、小数のまま積み上げるため)。
  * 本音の解禁・歩み寄りの判定と、気分の更新が要るかどうかは、整数部分 (段階) で決める
  */
+/**
+ * 毎ターン AI に渡す確認事項。指示文に書いてあっても、長い指示文の中の決まりは軽いモデルほど守りきれない
+ * (自動の試遊で、聞かれていない本音を自分から話す・不十分な案で解消にする・自分で解決策を足す、が多かった)。
+ * エンジンでは中身までは確かめられない (引用が実在するかまで) ので、直前に思い出させる
+ */
+const TURN_CHECKLIST = [
+  "本音 (未発見の懸念) を話すのは、今回のプレイヤーの発言がその話題 (reveal_hint) に触れたときだけ。別の話題への返事や一般的な質問で、自分から打ち明けない (「実は」「本音を言うと」と切り出さない)。",
+  "解消 (resolved) にするのは、プレイヤーの発言が resolved_when のすべての点を満たすときだけ。足りない点があれば、キャラクターの言葉でそう伝える。プレイヤーが言っていない解決策や約束を、キャラクターが自分で足さない。",
+];
+
 const levelOf = (pts: number) => Math.floor(pts / 100);
 const trustValue = (pts: number) => pts / 100;
 
@@ -729,6 +741,7 @@ export class Engine {
         difficulty: this.difficultyName,
         digest: this.digest(),
         voices: this.scenario.characters.map((c) => ({ id: c.id, name: c.name, speech: c.speech, sample_lines: c.sample_lines })),
+        checklist: TURN_CHECKLIST,
       };
     }
     if (this.phase === "ended" && !this.review && this.scenario && this.ending) {

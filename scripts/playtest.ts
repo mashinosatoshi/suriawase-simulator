@@ -14,7 +14,7 @@ import { Engine } from "../src/engine.js";
 import { BuiltinGm } from "../src/gm.js";
 import { ApiKeys, describeError, type LlmProvider, type ProviderId } from "../src/llm/index.js";
 import { pickTheme } from "../src/themes.js";
-import { parseOptions, rpmOf, seededRandom, turnPlan, turnPlanText, type Options } from "./playtest/config.js";
+import { parseOptions, rpmOf, seededRandom, tpmOf, turnPlan, turnPlanText, type Options } from "./playtest/config.js";
 import { fakeProvider } from "./playtest/fake.js";
 import { judge, transcriptOf } from "./playtest/judge.js";
 import { askKeys } from "./playtest/keypage.js";
@@ -152,9 +152,16 @@ async function main() {
   } else {
     const needed = [...new Set<ProviderId>([o.gm.provider, o.player.provider, ...(o.judge ? [o.judge.provider] : [])])];
     keys = await askKeys(needed);
-    // 1 分あたりの上限は、キー (提供元) ごと。同じ提供元の役どうしで共有する
+    // 1 分あたりの上限 (回数・トークン数) は、キー (提供元) ごと。同じ提供元の役どうしで共有する
     const limiters = new Map(
-      needed.filter((p) => rpmOf(o, p) > 0).map((p) => [p, new RateLimiter(rpmOf(o, p), (ms) => process.stdout.write(`\r  1 分あたりの上限 (${p} ${rpmOf(o, p)} 回) に合わせて ${Math.ceil(ms / 1000)} 秒待っています…`.padEnd(60)))]),
+      needed
+        .filter((p) => rpmOf(o, p) > 0 || tpmOf(o, p) > 0)
+        .map((p) => [
+          p,
+          new RateLimiter({ calls: rpmOf(o, p), tokens: tpmOf(o, p) }, (ms, reason) =>
+            process.stdout.write(`\r  1 分あたりの${reason}の上限 (${p}) に合わせて ${Math.ceil(ms / 1000)} 秒待っています…`.padEnd(60)),
+          ),
+        ]),
     );
     const make = (role: Role) => {
       const spec = o[role]!;
