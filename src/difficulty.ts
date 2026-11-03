@@ -43,6 +43,12 @@ export function randomParams(rand: () => number = Math.random): DifficultyParams
   };
 }
 
+/**
+ * 本質的な課題につながる本音 (root_issue.linked) の最低の数。本質的な課題は、解消すると形式的な課題の多くが解消に向かう根っこの原因なので、
+ * 本音全体の半数を超える数にする。プレイヤーが先に見つけておく数 (rootClues) より少なくはしない
+ */
+export const rootLinkedMin = (p: DifficultyParams) => Math.max(p.rootClues, Math.floor(p.concerns / 2) + 1);
+
 /** 本質的な課題への気づき。簡単は「薄々わかっている」(言い当てれば素直に認める)、難しいは「本人も気づいていない」。ほかは人柄で決める */
 export type RootAwareness = "unaware" | "unspoken";
 const ROOT_AWARENESS: Record<Difficulty, RootAwareness | "any"> = { easy: "unspoken", normal: "any", hard: "unaware", random: "any" };
@@ -147,7 +153,9 @@ export function difficultyBrief(level: Difficulty, p: DifficultyParams) {
     /** 登場人物の物わかりの平均 (1〜10) */
     understanding: p.understanding,
     turns: turnLimitOf(p),
-    /** 本質的な課題につながる本音 (root_issue.linked) の最低の数。プレイヤーはこの数だけ見つけてから、本質を言い当てられる */
+    /** 本質的な課題につながる本音 (root_issue.linked) の最低の数: 本音全体の半数を超える数 (本質を解消すると、形式的な課題の多くが解消に向かうため)。手がかりの数より少なくはしない */
+    root_linked: rootLinkedMin(p),
+    /** プレイヤーが先に見つけておく、つながる本音の数 (root_linked の内数)。これだけ見つけてから、本質を言い当てられる */
     root_clues: p.rootClues,
     /** 本質的な課題への owner の気づき (root_issue.awareness)。any なら persona に合わせて選ぶ */
     root_awareness: ROOT_AWARENESS[level],

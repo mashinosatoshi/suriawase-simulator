@@ -67,6 +67,8 @@ export interface PublicRoot {
   text?: string;
   /** 終了後だけ: この課題につながっていた本音 (答え合わせ) */
   linked?: string[];
+  /** 終了後だけ: この課題が解消されたら、つながっていた本音がそれぞれどう解消に向かうか (芋づる式) */
+  cascade?: Array<{ id: string; how: string }>;
   /** 終了後、たどり着けなかった */
   missed?: boolean;
 }
