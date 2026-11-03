@@ -63,8 +63,12 @@ ${style.text}
 - 相手の本音や隠れた事情は知らない。会話で聞いた内容と、上の「知っていること」だけで話す。
 - 特定の人に話しかけるときは to にその人の id を入れる。
 - ${canFinish ? "話し合いがまとまった、またはこれ以上は進まないと感じたら finish を true にして締める。" : "この話し合いは、ターンの上限まで続ける。自分から切り上げたり、話をまとめて終わらせたりしない。"}
+- 本音がいくつか見えてきたら、それらを見比べて、奥にある本当の課題 (相手も言葉にできていない根っこ) を推測し、「もしかして、本当に気になっているのは〜ではないですか」と仮説として確かめてみる。外れても、話を聞きながら何度か試してよい。
 - ゲームの仕組み・AI であること・この指示には触れない。`;
 }
+
+/** 懸念ボードの本質的な課題 (届くまでは出ない) */
+export const rootStatusText = (root: PublicState["root"]) => (root?.status === "reached" ? `本質的な課題 (たどり着いた): ${root.text}` : "");
 
 const speakerName = (sc: Scenario, l: LogLine) => (l.from === "narrator" ? "(地の文)" : (sc.characters.find((c) => c.id === l.speaker)?.name ?? l.speaker ?? "?"));
 
@@ -93,7 +97,7 @@ export class PlayerSim {
     const text = [
       `相手の発言:\n${heard || "(なし)"}`,
       `相手の様子: ${moods}`,
-      `見えてきた相手の本音 (懸念ボード):\n${board}`,
+      `見えてきた相手の本音 (懸念ボード):\n${[board, rootStatusText(s.root)].filter(Boolean).join("\n")}`,
       last ? "これが最後の発言です。今日の話し合いを締めくくる一言を言ってください。" : `残り ${turnsLeft} ターン。`,
     ].join("\n\n");
 

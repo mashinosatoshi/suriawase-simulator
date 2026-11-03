@@ -1,5 +1,6 @@
 // 終了後のスコア。このゲームの目的は、相手の隠れた本音をあぶり出すこと。重要で引き出しにくい本音を引き出すほど高く、
 // 解決に導くと、さらに解決点が入る (合意までの道筋も評価するが、引き出すほうを重く見る)。
+// 本音の奥にある本質的な課題 (本人も言葉にできていない根っこ) に届くと、満点の 4 分の 1 が入る。
 // 採点はエンジンが行う (AI の判断や言い回しで点が変わらないように)。AI は結果を見て、振り返りでスコアに触れるだけ。
 import { revealDifficulty } from "./difficulty.js";
 import type { Scenario } from "./scenario.js";
@@ -7,8 +8,13 @@ import { MAX_LEVEL, type ConcernStatus, type GameScore, type ScoreRank } from ".
 
 /** 引き出し点 = 重要度 × 引き出しにくさの倍率 × これ */
 const DISCOVER_POINTS = 5;
-/** 解決点 = 重要度 × 解決の難しさ × これ (引き出し点より軽く見る。満点のおよそ 3 割) */
+/** 解決点 = 重要度 × 解決の難しさ × これ (引き出し点より軽く見る。本音の点のおよそ 3 割) */
 const RESOLVE_POINTS = 2;
+/**
+ * 本質的な課題の点 = 本音の点 (引き出し + 解決) の満点 × これ。満点のちょうど 4 分の 1 になる。
+ * 表の本音をすべて引き出して解決しても、本質に届かなければ 75% (A) まで
+ */
+const ROOT_SHARE = 1 / 3;
 /** ランク: 満点に対する割合 (%) がこれ以上 */
 const RANKS: Array<[ScoreRank, number]> = [
   ["S", 90],
@@ -29,8 +35,8 @@ export const resolveRate = (understanding: number, trustStart: number) => 100 + 
 
 const points = (importance: number, per: number, rate: number) => Math.round((importance * per * rate) / 100);
 
-/** statuses: 各懸念の最終的な状態 (シナリオの並び順) */
-export function scoreGame(s: Scenario, statuses: ConcernStatus[]): GameScore {
+/** statuses: 各懸念の最終的な状態 (シナリオの並び順)。rootReached: 本質的な課題に届いたか */
+export function scoreGame(s: Scenario, statuses: ConcernStatus[], rootReached: boolean): GameScore {
   const items = s.concerns.map((c, i) => {
     const owner = s.characters.find((ch) => ch.id === c.owner)!;
     const difficulty = revealDifficulty(c.min_trust, owner.trust_start, owner.openness);
@@ -53,9 +59,12 @@ export function scoreGame(s: Scenario, statuses: ConcernStatus[]): GameScore {
       maxPoints: discoverMax + resolveMax,
     };
   });
-  const total = items.reduce((n, x) => n + x.discoverPoints + x.resolvePoints, 0);
-  const max = items.reduce((n, x) => n + x.maxPoints, 0);
+  const concernsMax = items.reduce((n, x) => n + x.maxPoints, 0);
+  const rootMax = Math.round(concernsMax * ROOT_SHARE);
+  const root = { reached: rootReached, points: rootReached ? rootMax : 0, maxPoints: rootMax };
+  const total = items.reduce((n, x) => n + x.discoverPoints + x.resolvePoints, 0) + root.points;
+  const max = concernsMax + rootMax;
   const percent = max ? Math.floor((total * 100) / max) : 0;
   const rank = RANKS.find(([, min]) => percent >= min)![0];
-  return { total, max, percent, rank, items };
+  return { total, max, percent, rank, items, root };
 }

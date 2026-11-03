@@ -41,6 +41,16 @@ export function isAuthError(err: unknown): boolean {
   return status === 401 || status === 403 || (status === 400 && detailOf(err).includes("API_KEY_INVALID"));
 }
 
+/**
+ * 少し待てば直るかもしれない失敗か (サービス側の混雑・利用上限・通信の乱れ)。キーの誤りや要求の誤りは含まない。
+ * 時間切れは含めない (1 回で数分かかるので、重ねて待たせない)
+ */
+export function isTransientError(err: unknown): boolean {
+  const status = statusOf(err);
+  if (status === 408 || status === 429 || (status >= 500 && status <= 504)) return true;
+  return Number.isNaN(status) && /Connection error|Failed to fetch|NetworkError|Load failed/i.test(detailOf(err));
+}
+
 /** API のエラーを、画面に出せる短い説明にする (各社の SDK のエラーは HTTP の status を持つ) */
 export function describeError(err: unknown): string {
   const status = statusOf(err);

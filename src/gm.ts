@@ -2,7 +2,7 @@
 // エンジンの「AI の仕事」(pendingWork) を見張り、ツール呼び出しで片付ける。ルールの検証はすべてエンジン任せ。
 import type { Engine, Work } from "./engine.js";
 import { BUILTIN_INSTRUCTIONS } from "./instructions.js";
-import { CATALOG, describeError, isValidModelId, PROVIDER_IDS, type AssistantTurn, type ChatSession, type LlmProvider, type ProviderId, type ToolCall, type ToolResult, type TurnInput } from "./llm/index.js";
+import { CATALOG, describeError, isTransientError, isValidModelId, PROVIDER_IDS, type AssistantTurn, type ChatSession, type LlmProvider, type ProviderId, type ToolCall, type ToolResult, type TurnInput } from "./llm/index.js";
 import type { AiStatus } from "./shared.js";
 import { GAME_TOOLS, toolJsonSchema, type GameToolName } from "./tools.js";
 
@@ -16,8 +16,27 @@ export const MAX_ATTEMPTS = 4;
 export const LAST_TRY_NOTE =
   "これが最後の試行です。今回は concern_updates を付けず (懸念は進めず)、台詞 (lines) だけで返答してください。対話を締めくくるターンなら epilogue も付けてください。懸念は、次のターン以降に根拠がそろってから進めます。";
 
+/**
+ * 1 つの会話で続けるプレイヤーの手番の数。超えたら、いまの全状態を渡して会話を作り直す。
+ * 履歴を持ち越し続けると、毎回の要求が手番ごとに大きくなり (50 手番で約 10 万トークン)、遅くなり、利用上限にも当たりやすい。
+ * 差し戻しの再送も履歴ごとなので、そのぶん重くなる
+ */
+export const SESSION_TURNS = 8;
+/** 会話を作り直すときに渡す、直近の会話の行数 (プレイヤーの発言は、引用の根拠になるので全部渡す) */
+const PRIMER_LOG_LINES = 16;
+/** 一時的な失敗 (混雑・通信の乱れ) のとき、自動で待って再試行する間隔 (ミリ秒)。直らなければ止まって、利用者の「再試行」を待つ */
+export const RETRY_DELAYS_MS = [4_000, 10_000, 25_000];
+
 const EXPECTED: Record<Work["type"], GameToolName> = { new_game: "start_scenario", player_action: "reply", review: "submit_review" };
 const TOOL_SPECS = GAME_TOOLS.map((t) => ({ name: t.name, description: t.description, parameters: toolJsonSchema(t) }));
+/** 仕事ごとに、使うツールだけを渡す (毎回 3 つ渡すと約 15,000 文字になり、Gemini では込み入りすぎて要求を受け付けなくなることもある) */
+const toolsFor = (work: Work) => TOOL_SPECS.filter((t) => t.name === EXPECTED[work.type]);
+
+export interface GmOptions {
+  /** 自動で再試行する間隔 (ミリ秒)。空なら再試行しない */
+  retryDelaysMs?: number[];
+  sleep?: (ms: number) => Promise<void>;
+}
 
 export interface Selection {
   provider: ProviderId;
@@ -49,6 +68,12 @@ export class BuiltinGm {
   private sessionEpoch = -1;
   /** セッションを作ったときの仕事 (同じ新規ゲームの再試行なら、同じ会話を続ける) */
   private sessionKey: string | null = null;
+  /** セッションが扱っている仕事の種類。変わったら会話を作り直す (種類ごとに、渡すツールが違う) */
+  private sessionKind: Work["type"] | null = null;
+  /** このセッションで片付けたプレイヤーの手番の数 (SESSION_TURNS に届いたら作り直す) */
+  private sessionTurns = 0;
+  /** 会話の頭に付ける全状態。最初の送信が成功するまで持っておく (失敗しても、再試行で同じものを付ける) */
+  private primer = "";
   /** 前回のツール呼び出しへの結果。次の送信で必ず返す (返さないと各社の API が履歴を受け付けない) */
   private pending: ToolResult[] = [];
   /** 実行中の処理と、その後に予約された処理 (重ねて走らせず、要求は取りこぼさない) */
@@ -56,6 +81,9 @@ export class BuiltinGm {
   private queued: Promise<void> | null = null;
   private failedKey: string | null = null;
   private error: string | null = null;
+  private notice: string | null = null;
+  private retryDelays: number[];
+  private sleep: (ms: number) => Promise<void>;
 
   constructor(
     private engine: Engine,
@@ -65,7 +93,10 @@ export class BuiltinGm {
     private selection: Selection | null,
     private onStatus: () => void,
     private log: (...a: unknown[]) => void = () => {},
+    options: GmOptions = {},
   ) {
+    this.retryDelays = options.retryDelaysMs ?? RETRY_DELAYS_MS;
+    this.sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
     engine.onChange(() => void this.tick());
   }
 
@@ -114,6 +145,7 @@ export class BuiltinGm {
       }),
       current: sel && { ...sel },
       error: this.error,
+      notice: this.notice,
     };
   }
 
@@ -148,24 +180,36 @@ export class BuiltinGm {
 
   private async handle(work: Work, key: string): Promise<void> {
     if (!this.selection) return this.setError(key, "AI が選ばれていません。開始画面で API キーを入力して、AI を選んでください");
-    const fresh = !this.session || this.sessionEpoch !== this.engine.epoch || (work.type === "new_game" && this.sessionKey !== key);
+    const fresh =
+      !this.session ||
+      this.sessionEpoch !== this.engine.epoch ||
+      this.sessionKind !== work.type ||
+      (work.type === "new_game" && this.sessionKey !== key) ||
+      (work.type === "player_action" && this.sessionTurns >= SESSION_TURNS);
     if (fresh) {
-      this.session = this.makeProvider(this.selection.provider).newSession({ system: BUILTIN_INSTRUCTIONS, tools: TOOL_SPECS, model: this.selection.model });
+      this.session = this.makeProvider(this.selection.provider).newSession({ system: BUILTIN_INSTRUCTIONS, tools: toolsFor(work), model: this.selection.model });
       this.sessionEpoch = this.engine.epoch;
       this.sessionKey = key;
+      this.sessionKind = work.type;
+      this.sessionTurns = 0;
       this.pending = [];
+      // 新しい会話は、前の会話の履歴を持たない。いまの全状態 (隠し情報を含む) と、プレイヤーのこれまでの全発言を最初に渡して引き継ぐ。
+      // 会話は直近の分だけ (全文は要らない。履歴を増やさないための区切り)
+      this.primer =
+        work.type === "new_game"
+          ? ""
+          : `これは進行中のゲームです。いまの全状態 (隠し情報を含む):\n${JSON.stringify(this.engine.fullState(work.type === "player_action" ? { recent: PRIMER_LOG_LINES, playerLines: true, pending: false } : { recent: 0, pending: false }))}\n\n` +
+            (work.type === "player_action" ? "recent_log は直近の会話だけです。player_lines は、プレイヤーのこれまでの全発言 (turn つき)。checks や quote で引用できるのは、この発言と今回の発言です。\n\n" : "");
     }
     const session = this.session!;
-    // 会話の途中から引き継ぐとき (同じシナリオでやり直し・対話の途中で AI を変えた等) は、隠し情報と会話全体を含む全状態を最初に渡す
-    const primer = fresh && work.type !== "new_game" ? `これは進行中のゲームです。いまの全状態 (隠し情報を含む):\n${JSON.stringify(this.engine.fullState({ wholeLog: true }))}\n\n` : "";
-    let input: TurnInput = { toolResults: this.pending, text: primer + renderWork(work) };
+    let input: TurnInput = { toolResults: this.pending, text: this.primer + renderWork(work) };
     this.pending = [];
     let lastProblem = "";
 
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-      let turn: AssistantTurn;
+      let turn: AssistantTurn | null;
       try {
-        turn = await session.next(input);
+        turn = await this.nextWithRetry(session, input, key);
       } catch (err) {
         // 送れなかった入力は履歴に入っていない。返すべきツール結果は持ち越す
         this.pending = input.toolResults ?? [];
@@ -174,10 +218,17 @@ export class BuiltinGm {
         this.log(`AI の呼び出しに失敗: ${message}`);
         return this.setError(key, message);
       }
+      if (!turn) {
+        // 自動で再試行を待つあいだに、仕事が変わった (プレイヤーが最初からやり直した等)。古い会話は捨てる
+        this.session = null;
+        this.pending = [];
+        return this.setError(null, null);
+      }
       if (turn.problem) {
         lastProblem = turn.problem; // 履歴には入っていないので、同じ入力で送り直す
         continue;
       }
+      this.primer = ""; // 会話の頭に付ける全状態は、受け付けられた
       if (!turn.toolCalls.length) {
         lastProblem = "AI がツールを呼びませんでした";
         input = { text: `${EXPECTED[work.type]} を呼んでください。テキストだけの返事は画面に表示されません。` };
@@ -189,6 +240,7 @@ export class BuiltinGm {
         if (results.some((r) => !r.isError)) {
           this.pending = results;
           this.sessionEpoch = this.engine.epoch;
+          if (work.type === "player_action") this.sessionTurns++;
         } else {
           // 応答を待つ間に仕事が変わった (プレイヤーが最初からやり直した等)。古い会話は捨てる
           this.session = null;
@@ -205,6 +257,33 @@ export class BuiltinGm {
     this.setError(key, `AI が有効な返答を作れませんでした (${MAX_ATTEMPTS} 回試行)。${shorten(lastProblem)}`);
   }
 
+  /**
+   * 1 回送る。混雑・通信の乱れなど、一時的な失敗なら、少し待って自動でやり直す (画面には案内を出す)。
+   * 待つあいだに仕事が変わったら (プレイヤーが最初からやり直した等) null を返す。直らない失敗・一時的でない失敗は、そのまま投げる
+   */
+  private async nextWithRetry(session: ChatSession, input: TurnInput, key: string): Promise<AssistantTurn | null> {
+    for (let i = 0; ; i++) {
+      try {
+        const turn = await session.next(input);
+        this.setNotice(null);
+        return turn;
+      } catch (err) {
+        const wait = this.retryDelays[i];
+        if (wait === undefined || !isTransientError(err)) {
+          this.setNotice(null);
+          throw err;
+        }
+        this.log(`AI の呼び出しに失敗 (${describeError(err)})。${wait / 1000} 秒待って自動で再試行します (${i + 1}/${this.retryDelays.length})`);
+        this.setNotice(`AI が混み合っているようです。${Math.round(wait / 1000)} 秒待って、自動で再試行します (${i + 1}/${this.retryDelays.length})`);
+        await this.sleep(wait);
+        if (this.keyOf(this.engine.pendingWork()) !== key) {
+          this.setNotice(null);
+          return null;
+        }
+      }
+    }
+  }
+
   private run(call: ToolCall): ToolResult {
     const tool = GAME_TOOLS.find((t) => t.name === call.name);
     if (!tool) return { id: call.id, name: call.name, content: `不明なツールです: ${call.name}。使えるのは ${GAME_TOOLS.map((t) => t.name).join(" / ")}`, isError: true };
@@ -214,6 +293,12 @@ export class BuiltinGm {
     } catch (err) {
       return { id: call.id, name: call.name, content: `ツールの実行中にエラー: ${err instanceof Error ? err.message : String(err)}`, isError: true };
     }
+  }
+
+  private setNotice(message: string | null) {
+    if (this.notice === message) return;
+    this.notice = message;
+    this.onStatus();
   }
 
   private setError(key: string | null, message: string | null) {

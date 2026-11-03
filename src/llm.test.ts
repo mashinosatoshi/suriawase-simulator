@@ -6,6 +6,7 @@ import { ApiKeys, checkKeyFormat, describeError, isAuthError } from "./llm/index
 import { geminiProvider } from "./llm/gemini.js";
 import { openAiProvider } from "./llm/openai.js";
 import type { SessionOptions } from "./llm/types.js";
+import { GAME_TOOLS, toolJsonSchema } from "./tools.js";
 
 const options = (model: string): SessionOptions => ({
   system: "あなたは GM です",
@@ -169,6 +170,13 @@ test("Gemini: 関数呼び出しを強制し、モデルの応答は署名ごと
   assert.match(t2.toolCalls[0].id, /^local-/);
   await s.next({ toolResults: [{ id: t2.toolCalls[0].id, name: "reply", content: "だめ", isError: true }] });
   assert.deepEqual(rec.calls[2].contents.at(-1), { role: "user", parts: [{ functionResponse: { name: "reply", response: { error: "だめ" } } }] });
+});
+
+test("ツールの引数のスキーマに、巨大な整数の範囲を作らない (Gemini が要求ごと受け付けなくなる)", () => {
+  // 範囲を書かない z.number().int() は、zod が ±9007199254740991 の範囲を付ける。Gemini は関数を必ず呼ばせるとき、
+  // スキーマを出力の制約に組み立てるので、こうした範囲で込み入りすぎると 400 INVALID_ARGUMENT を返す (実際の API で確かめた)
+  const sent = JSON.stringify(GAME_TOOLS.map(toolJsonSchema));
+  assert.ok(!sent.includes("9007199254740991"));
 });
 
 test("Gemini: 安全上の理由などで止まったら、問題として返し履歴には入れない", async () => {

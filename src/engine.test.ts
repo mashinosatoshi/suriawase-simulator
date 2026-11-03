@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseDifficulty, probesNeeded, randomParams, revealDifficulty, trustGainRate } from "./difficulty.js";
+import { parseDifficulty, probesNeeded, randomParams, revealDifficulty, rootLinkedMin, trustGainRate } from "./difficulty.js";
 import { Engine, stripSelfIntro, type Work } from "./engine.js";
 import { leaksSecret, replySchema, type ReplyInput, type Scenario } from "./scenario.js";
 import { discoverRate, resolveRate, scoreGame } from "./score.js";
@@ -45,6 +45,18 @@ const scenario = () => ({
     { id: "c4", owner: "mayor", category: "安全", text: "子どもが橋から川へ落ちないか心配だ", importance: 6, reveal_hint: "子どもや安全のことを尋ねる", min_trust: 7, resolved_when: "欄干など、子どもを守る備えが示される" },
     { id: "c5", owner: "ferry", category: "工事", text: "工事のあいだ船が出せず収入が途絶える", importance: 5, reveal_hint: "工事中の川の使い方を尋ねる", min_trust: 6, resolved_when: "工事中も船を出せる段取りが示される" },
   ],
+  root_issue: {
+    owner: "mayor",
+    text: "村の若い担い手が減り、村の暮らしや祭りをこの先も続けられるかが不安だ",
+    linked: ["c1", "c3", "c4"],
+    cascade: [
+      { id: "c1", how: "担い手の不安が晴れ、村の将来の見通しが立てば、大きな橋にこだわらず、予算内の小さな橋を受け入れられる" },
+      { id: "c3", how: "村の暮らしを続ける手応えがあれば、祭りの行列の道筋が変わることも、受け入れやすくなる" },
+      { id: "c4", how: "村に若い人が残る見通しがあれば、子どもの安全のための備えにも、みんなで取り組める" },
+    ],
+    awareness: "unaware" as "unaware" | "unspoken",
+    reach_when: "村の担い手が減っていることと、橋の場所へのこだわりがその不安の表れであることを言い当てる",
+  },
   briefing: [
     { label: "計画", text: "県の補助で、来年度中に川へ橋を 1 本かける" },
     { label: "候補地", text: "東の浅瀬と、村の中心に近い西の渡し場の 2 か所" },
@@ -621,7 +633,7 @@ const reviewInput = (ids: string[]) => ({
   overall: "予算を丁寧に尋ねたのは良かったが、他の人の事情までは聞けなかった。",
   good: ["最初に予算を気遣って尋ねた"],
   improve: ["渡し守の暮らしにも触れてみる"],
-  concerns: ids.map((id) => ({ id, advice: `${id} は、聞き方を変えれば届いたはず` })),
+  concerns: ids.map((id) => ({ id, advice: "もう少し聞き方を変えれば、届いたはず。" })),
 });
 
 test("終了すると AI に振り返りの依頼が届く (隠し情報つき・会話の全文つき)", () => {
@@ -787,14 +799,15 @@ test("毎ターン、各キャラクターの口調の手本が AI に渡る", (
   assert.ok(!json.includes("一人称は") && !json.includes("費用のことは気になるわい"));
 });
 
-test("毎ターン、破られやすい決まり (聞かれていない本音・甘い解消・結末の言い切り) の確認事項が AI に渡る", () => {
+test("毎ターン、破られやすい決まり (聞かれていない本音・甘い解消・結末の言い切り・本質を先に言う) の確認事項が AI に渡る", () => {
   const e = playing("こんにちは");
   const { checklist } = work(e);
-  assert.equal(checklist.length, 3);
+  assert.equal(checklist.length, 4);
   assert.match(checklist[0], /reveal_hint/);
   assert.match(checklist[1], /checks/);
   assert.match(checklist[1], /自分で足さない/);
   assert.match(checklist[2], /結末を言い切らない/);
+  assert.match(checklist[3], /キャラクターから言わず.*root_reach/);
 });
 
 test("解消には、解消条件との照らし合わせ (checks) が要る: 点の抜き出し・覆い方・引用の実在", () => {
@@ -1061,6 +1074,16 @@ function scenarioOf(level: PresetDifficulty): Fixture {
     const own = start[c.owner as keyof typeof start];
     return { ...c, min_trust: i < openAtStart ? Math.min(c.min_trust, own) : Math.max(c.min_trust, own + 1) };
   });
+  // 本質的な課題への気づきは難易度で決まる (簡単: 薄々わかっている / 難しい: 本人も気づいていない)
+  if (level === "easy") s.root_issue = { ...s.root_issue, awareness: "unspoken" };
+  // つながる本音は、本音全体の半数を超える数 (難しいは 7 つのうち 4 つ)
+  if (level === "hard") {
+    s.root_issue = {
+      ...s.root_issue,
+      linked: ["c1", "c2", "c3", "c4"],
+      cascade: [...s.root_issue.cascade, { id: "c2", how: "村に人が残る見通しがあれば、渡し守の仕事の形が変わることにも、前向きに向き合える" }],
+    };
+  }
   return s;
 }
 function startedAt(level: PresetDifficulty, edit: (s: Fixture) => void = () => {}) {
@@ -1355,10 +1378,163 @@ test("本音の重要度: ゲーム中は画面に送らない (終了後の答�
   assert.equal(withImportance([10, 1, 3, 8, 5]), "");
 });
 
+// ---- 本質的な課題 ---------------------------------------------------------------------------
+// 普通のシナリオの本質的な課題は村長のもので、予算 (c1)・祭り (c3)・子どもの安全 (c4) の根っこ。普通では、つながる本音を 2 つ見つけると言い当てられる
+
+/** 本質を言い当てる発言と、到達の条件 (reach_when) との照らし合わせ */
+const HYPOTHESIS = "もしかして、村の若い人が減って、この先も村を続けられるかが一番の心配なんじゃないですか。橋の場所にこだわるのも、そのためでは。";
+const REACH = {
+  quote: "村の若い人が減って、この先も村を続けられるかが一番の心配",
+  checks: [
+    { point: "村の担い手が減っていること", quote: "村の若い人が減って" },
+    { point: "橋の場所へのこだわりがその不安の表れであること", quote: "橋の場所にこだわるのも、そのためでは" },
+  ],
+  note: "担い手が減り、村が続くかが不安だと言い当てた",
+};
+const realize = line("mayor", "…言われてみれば、そうかもしれん。わしが本当に怖いのは、村が続かんことじゃ。");
+
+/** c1 と c3 (本質につながる本音) を見つけ、3 ターン目に本質を言い当てる発言をした状態 */
+function cluesFound(found = ["c1", "c3"]) {
+  const e = playing("村の予算や、お祭りのことを聞かせてください。");
+  const asked: Record<string, string> = { c1: "村の予算", c3: "お祭りのこと" };
+  found.forEach((id, i) => {
+    if (i > 0) e.act({ text: "村の予算や、お祭りのことを聞かせてください。" });
+    must(e.reply({ turn: i + 1, lines: [line()], concern_updates: [{ id, to: "revealed", asked: asked[id], hint: HINT[id] }] }));
+  });
+  e.act({ text: HYPOTHESIS });
+  return e;
+}
+
+test("本質的な課題: ゲーム中は届くまで何も送らない (課題があること自体、見せない) / AI には毎ターン渡る / 終了後は答え合わせとして公開する", () => {
+  const e = playing("こんにちは");
+  assert.equal(e.publicState().root, null);
+  assert.ok(!JSON.stringify(e.publicState()).includes("担い手"));
+  assert.deepEqual(work(e).digest.root, {
+    owner: "mayor",
+    text: "村の若い担い手が減り、村の暮らしや祭りをこの先も続けられるかが不安だ",
+    awareness: "unaware",
+    reach_when: "村の担い手が減っていることと、橋の場所へのこだわりがその不安の表れであることを言い当てる",
+    linked: ["c1", "c3", "c4"],
+    cascade: scenario().root_issue.cascade,
+    clues_found: 0,
+    clues_needed: 2,
+    reached: false,
+  });
+  // 届かないまま終わると、中身とつながっていた本音が公開され、振り返りにも渡る
+  must(reply(e));
+  e.act({ text: "今日はここまでにします" }, true);
+  must(e.reply({ turn: 2, lines: [line()], epilogue: "また話そう。" }));
+  assert.deepEqual(e.publicState().root, { status: "hidden", owner: "mayor", text: "村の若い担い手が減り、村の暮らしや祭りをこの先も続けられるかが不安だ", linked: ["c1", "c3", "c4"], cascade: scenario().root_issue.cascade, missed: true });
+  const review = e.pendingWork() as Extract<Work, { type: "review" }>;
+  assert.deepEqual([review.root_issue.reached, review.root_issue.clues_found, review.root_issue.clues_needed], [false, 0, 2]);
+  assert.match(review.note, /本質的な課題 \(root_issue\)/);
+});
+
+test("本質的な課題: 手がかり (つながる本音) をそろえたうえで、プレイヤーが言い当てたときだけ届く", () => {
+  // 手がかりが 1 つだけでは、正しく言い当てても届かない (当てずっぽうと同じ)
+  const early = cluesFound(["c1"]);
+  assert.match(errorsOf(early.reply({ turn: 2, lines: [realize], root_reach: REACH })), /手がかりが足りません \(本質につながる本音のうち、見つかっているのは 1 \/ 必要 2\)/);
+  // 同じ返答で見つけた本音は、手がかりに数えない (言い当てた時点では知らなかった)
+  const sameTurn = cluesFound(["c1"]);
+  assert.match(errorsOf(sameTurn.reply({ turn: 2, lines: [realize], concern_updates: [{ id: "c3", to: "revealed", asked: "お祭り", hint: HINT.c3 }], root_reach: REACH })), /手がかりが足りません/);
+
+  const e = cluesFound();
+  assert.deepEqual([work(e).digest.root.clues_found, work(e).digest.root.clues_needed], [2, 2]);
+  const reach = (r: Partial<typeof REACH>, lines = [realize]) => errorsOf(e.reply({ turn: 3, lines, root_reach: { ...REACH, ...r } }));
+  assert.match(reach({ quote: "村の担い手が減っているのでは" }), /quote が、プレイヤーの今回の発言に見つかりません/); // 言い換えは通らない
+  assert.match(reach({ checks: [REACH.checks[0]] }), /到達の条件の一部の点にしか/); // 要素が欠けた仮説では届かない
+  assert.match(reach({ checks: [{ point: "将来が不安", quote: "一番の心配" }] }), /point「将来が不安」が到達の条件の中に見つかりません/);
+  assert.doesNotMatch(reach({ checks: [REACH.checks[0]] }), /担い手/); // エラーに到達の条件の中身は書かない (画面に出ることがある)
+  assert.match(reach({}, [line("ferry", "ふん。")]), /owner \(mayor\) が台詞で応じてください/); // 届いたら、本質を抱えていた人が応じる
+  assert.equal(e.publicState().root, null); // どれも反映されない
+
+  must(e.reply({ turn: 3, lines: [realize], root_reach: REACH }));
+  assert.deepEqual(e.publicState().root, { status: "reached", owner: "mayor", text: "村の若い担い手が減り、村の暮らしや祭りをこの先も続けられるかが不安だ" });
+  assert.deepEqual(e.fullState().root, { reached: true, turn: 3, note: "担い手が減り、村が続くかが不安だと言い当てた" });
+  e.act({ text: HYPOTHESIS });
+  assert.match(errorsOf(e.reply({ turn: 4, lines: [realize], root_reach: REACH })), /すでに本質的な課題に届いています/);
+  // 届いた後は、本質を台詞にしてよい
+  must(e.reply({ turn: 4, lines: [line("mayor", "村の若い担い手が減り、村の暮らしや祭りをこの先も続けられるかが不安なんじゃ。")] }));
+  // 届いたら、スコアに満点の 4 分の 1 (110 点) が入る
+  e.act({ text: "今日はここまでにします" }, true);
+  must(e.reply({ turn: 5, lines: [line()], epilogue: "また話そう。" }));
+  assert.deepEqual(e.publicState().ending!.score.root, { reached: true, points: 110, maxPoints: 110 });
+  assert.equal(e.publicState().ending!.score.total, 45 + 20 + 110); // c1・c3 の引き出し点 + 本質
+});
+
+test("本質的な課題: 届く前に、キャラクターが台詞でほぼそのまま言ったら差し戻す", () => {
+  const e = playing("村のことを聞かせてください。");
+  const leak = line("mayor", "村の若い担い手が減って、村の暮らしや祭りをこの先も続けられるかが不安なんじゃ。");
+  assert.match(errorsOf(reply(e, { lines: [leak] })), /まだ届いていない本質的な課題がほぼそのまま出ています/);
+});
+
+test("本質的な課題の作り方: 持ち主とつながる本音が実在し、数は難易度で決まる / 表の本音の言い換えや、公開される文への書き込みは不可", () => {
+  const g = new Engine();
+  g.requestNewGame("");
+  const brief = (g.pendingWork() as Extract<Work, { type: "new_game" }>).difficulty;
+  assert.deepEqual([brief.root_clues, brief.root_linked, brief.root_awareness], [2, 3, "any"]); // つながる本音は、本音 5 つの半数を超える 3 つ以上
+  const withRoot = (edit: (s: Fixture) => void) => {
+    const s = scenario();
+    edit(s);
+    return errorsOf(g.startScenario(s));
+  };
+  assert.match(withRoot((s) => (s.root_issue.owner = "nobody")), /root_issue の owner "nobody" がキャラクターに存在しません/);
+  assert.match(withRoot((s) => (s.root_issue.linked = ["c1", "c9"])), /root_issue\.linked の c9 は懸念 \(concerns\) に存在しません/);
+  assert.match(withRoot((s) => (s.root_issue.linked = ["c1", "c1"])), /同じ懸念が重複/);
+  assert.match(withRoot((s) => (s.root_issue.text = "村の蓄えが少なく、大きな橋は作れない")), /懸念 "c1" の本音とほとんど同じです/);
+  assert.match(withRoot((s) => (s.briefing[0].text = "村の若い担い手が減り、村の暮らしや祭りを続けられるか")), /briefing\[0\] に、本質的な課題 \(root_issue\.text\) がほぼそのまま/);
+  assert.equal(g.phase, "setup");
+  // 簡単は「薄々わかっている」、難しいは「本人も気づいていない」で、つながる本音も多く要る
+  const easy = new Engine();
+  easy.requestNewGame("", "easy");
+  assert.match(errorsOf(easy.startScenario({ ...scenarioOf("easy"), root_issue: { ...scenarioOf("easy").root_issue, awareness: "unaware" } })), /root_issue\.awareness を unspoken にしてください/);
+  const hard = new Engine();
+  hard.requestNewGame("", "hard");
+  assert.equal((hard.pendingWork() as Extract<Work, { type: "new_game" }>).difficulty.root_clues, 3);
+  assert.match(errorsOf(hard.startScenario({ ...scenarioOf("hard"), root_issue: { ...scenarioOf("hard").root_issue, linked: ["c1", "c3"] } })), /本質的な課題につながる本音 \(root_issue\.linked\) を 4 個以上にしてください \(本音全体 7 個の半数を超える数。いま 2 個\)/);
+  assert.equal(withRoot(() => {}), "");
+});
+
+test("本質的な課題は、解消すると形式的な課題の多くが解消に向かう根っこの原因: つながる本音は半数を超え、本音ごとに「どう解消に向かうか」(cascade) を過不足なく書く", () => {
+  // つながる本音の最低の数は、本音全体の半数を超える数 (手がかりの数より少なくはしない)
+  const p = (concerns: number, rootClues: number) => ({ ...DIFFICULTY_PRESETS.normal, concerns, rootClues });
+  assert.deepEqual([[3, 2], [4, 2], [5, 2], [7, 3], [8, 4], [8, 2], [5, 4]].map(([n, c]) => rootLinkedMin(p(n, c))), [2, 3, 3, 4, 5, 5, 4]);
+  assert.deepEqual([DIFFICULTY_PRESETS.easy, DIFFICULTY_PRESETS.normal, DIFFICULTY_PRESETS.hard].map(rootLinkedMin), [3, 3, 4]);
+
+  const g = new Engine();
+  g.requestNewGame("");
+  const withRoot = (edit: (s: Fixture) => void) => {
+    const s = scenario();
+    edit(s);
+    return errorsOf(g.startScenario(s));
+  };
+  // 本音 5 つのうち、つながるのが 2 つだけ (半数を超えない) では、形式的な課題の多くは解消に向かわない
+  assert.match(
+    withRoot((s) => {
+      s.root_issue.linked = ["c1", "c3"];
+      s.root_issue.cascade = s.root_issue.cascade.filter((c) => c.id !== "c4");
+    }),
+    /本質的な課題につながる本音 \(root_issue\.linked\) を 3 個以上にしてください \(本音全体 5 個の半数を超える数。いま 2 個\)。本質的な課題は、解消すると、形式的な課題 \(表の本音\) の多くが芋づる式に解消に向かう/,
+  );
+  // cascade は linked と過不足なく対応する
+  assert.match(withRoot((s) => (s.root_issue.cascade = s.root_issue.cascade.filter((c) => c.id !== "c4"))), /root_issue\.cascade は、linked の本音を過不足なく挙げてください \(足りない: c4\)/);
+  assert.match(withRoot((s) => s.root_issue.cascade.push({ id: "c2", how: "渡し守の暮らしが守られれば、橋の場所の話も進められる" })), /\(linked にない: c2\)/);
+  assert.match(withRoot((s) => s.root_issue.cascade.push({ id: "c4", how: "もう一つ、同じ本音の説明を足してしまった例です" })), /root_issue\.cascade に同じ本音が重複/);
+  assert.match(withRoot((s) => (s.root_issue.cascade[0].how = "短い")), /cascade\.0\.how/); // どう解消に向かうかを、具体的に書く
+  assert.equal(g.phase, "setup");
+  assert.equal(withRoot(() => {}), "");
+
+  // 終了後だけ、答え合わせとして公開される (ゲーム中は課題があること自体、見せない)
+  const e = playing("こんにちは");
+  assert.equal(e.publicState().root, null);
+  assert.deepEqual(work(e).digest.root.cascade.map((c) => c.id), ["c1", "c3", "c4"]); // AI には毎ターン渡る
+});
+
 // ---- スコア ---------------------------------------------------------------------------------
 // 普通のシナリオ: 村長 (信頼度 6・打ち解けやすさ 9・物わかり 6)、渡し守 (信頼度 4・打ち解けやすさ 3・物わかり 4)。
 // 引き出しにくさは c1・c3 が 1 (最初から話せる)、c4 が 2、渡し守の c2・c5 が 5。
-// 本音ごとの最高点 (引き出し + 解決): c1 45+29=74 / c2 70+27=97 / c3 20+13=33 / c4 38+19=57 / c5 50+19=69 (満点 330。うち引き出し点 223)
+// 本音ごとの最高点 (引き出し + 解決): c1 45+29=74 / c2 70+27=97 / c3 20+13=33 / c4 38+19=57 / c5 50+19=69 (合計 330。うち引き出し点 223)。
+// 本質的な課題は本音の満点の 3 分の 1 (110) で、満点は 440 (本質がちょうど 4 分の 1)
 
 test("スコアの倍率: 引き出しにくい本音ほど引き出し点が、物わかりが悪く信頼されていない相手ほど解決点が高い", () => {
   assert.equal(discoverRate(1), 100); // 最初から話せる
@@ -1370,21 +1546,24 @@ test("スコアの倍率: 引き出しにくい本音ほど引き出し点が、
 });
 
 test("スコア: 重要で引き出しにくい本音を引き出すほど高い (解決点より重い) / 完全合意のボーナスは無い / ランクは満点に対する割合", () => {
-  // 妥協案 (c1・c2 を解決、ほかは見つけられなかった): 74 + 97 = 171 点 (51%)
+  // 妥協案 (c1・c2 を解決、ほかは見つけられなかった): 74 + 97 = 171 点 (38%)
   const two = endAfterResolving(["c1", "c2"]).score;
-  assert.deepEqual([two.total, two.max, two.percent, two.rank], [171, 330, 51, "C"]);
+  assert.deepEqual([two.total, two.max, two.percent, two.rank], [171, 440, 38, "C"]);
+  assert.deepEqual(two.root, { reached: false, points: 0, maxPoints: 110 });
   assert.ok(!("bonus" in two));
   const c2 = two.items.find((x) => x.id === "c2")!;
   assert.deepEqual([c2.revealDifficulty, c2.discovered, c2.resolved, c2.discoverRate, c2.resolveRate, c2.discoverPoints, c2.resolvePoints], [5, true, true, 200, 190, 70, 27]);
   assert.deepEqual(two.items.find((x) => x.id === "c3"), { id: "c3", importance: 4, revealDifficulty: 1, discovered: false, resolved: false, discoverRate: 100, resolveRate: 160, discoverPoints: 0, resolvePoints: 0, maxPoints: 33 });
-  // 完全合意: すべての点で満点 (ボーナスは足さない)
+  // 完全合意でも、本質的な課題に届かなければ 75% (A) まで (ボーナスは足さない)
   const e = nearlyAgreed();
   must(e.reply({ turn: 6, lines: [line()], epilogue: "橋は無事にかかった。", concern_updates: resolveLast }));
   const full = e.publicState().ending!.score;
-  assert.deepEqual([full.total, full.max, full.percent, full.rank], [330, 330, 100, "S"]);
-  // すべて引き出したが、何も解決できなかった: 引き出し点だけで 223 点 (67%)。2 つを解決した妥協案より高い
-  const allFound = scoreGame(scenario() as Scenario, ["revealed", "revealed", "revealed", "proposed", "revealed"]);
-  assert.deepEqual([allFound.total, allFound.percent, allFound.rank], [223, 67, "B"]);
+  assert.deepEqual([full.total, full.max, full.percent, full.rank], [330, 440, 75, "A"]);
+  const resolvedAll = ["resolved", "resolved", "resolved", "resolved", "resolved"] as const;
+  assert.deepEqual([scoreGame(scenario() as Scenario, [...resolvedAll], true)].map((g) => [g.total, g.percent, g.rank])[0], [440, 100, "S"]); // 本質にも届けば満点
+  // すべて引き出したが、何も解決できなかった: 引き出し点だけで 223 点 (50%)。2 つを解決した妥協案より高い
+  const allFound = scoreGame(scenario() as Scenario, ["revealed", "revealed", "revealed", "proposed", "revealed"], false);
+  assert.deepEqual([allFound.total, allFound.percent, allFound.rank], [223, 50, "C"]);
   // 引き出しただけ (c1 を見つけて持ち帰り): 引き出し点 45 だけ
   const one = endedWithOneFound().publicState().ending!.score;
   assert.deepEqual([one.total, one.rank], [45, "D"]);
@@ -1393,12 +1572,12 @@ test("スコア: 重要で引き出しにくい本音を引き出すほど高い
 
 test("スコア: 同じ結果でも、相手が手ごわいほど点が高い / 振り返りを書く AI にも渡る", () => {
   const statuses = ["resolved", "resolved", "hidden", "hidden", "hidden"] as const;
-  const base = scoreGame(scenario() as Scenario, [...statuses]);
+  const base = scoreGame(scenario() as Scenario, [...statuses], false);
   // 渡し守がもっと頑固 (物わかり 4 → 2) で、渡し賃の本音も打ち解けにくい (min_trust 6 → 8) とき
   const tough = scenario();
   tough.characters[1].understanding = 2;
   tough.concerns[1].min_trust = 8;
-  const hard = scoreGame(tough as Scenario, [...statuses]);
+  const hard = scoreGame(tough as Scenario, [...statuses], false);
   const c2 = (g: typeof base) => g.items.find((x) => x.id === "c2")!;
   assert.deepEqual([c2(base).revealDifficulty, c2(base).discoverPoints, c2(base).resolvePoints], [5, 70, 27]);
   assert.deepEqual([c2(hard).revealDifficulty, c2(hard).discoverPoints, c2(hard).resolvePoints], [7, 88, 29]); // 7×5×250% / 7×2×210%
