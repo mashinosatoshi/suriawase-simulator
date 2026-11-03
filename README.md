@@ -166,6 +166,7 @@ public/privacy.html  プライバシーポリシー
 public/terms.html    利用規約
 public/_headers      セキュリティヘッダーの定義 (公開用・ローカル用のサーバーが送る)
 scripts/smoke.ts     MCP まで通した結合テスト
+scripts/playtest.ts  自動試遊 (本物の AI で何ゲームも回し、会話の不自然さを審査役の AI に挙げさせる)
 Dockerfile           公開用のコンテナ (Cloud Run)
 .github/             CI (型チェック・テスト・結合テスト・コンテナのビルド) と Dependabot
 ```
@@ -181,6 +182,24 @@ npm run serve       # 公開用と同じ配信を手元で (http://localhost:808
 ```
 
 ポートは `PORT` で変えられる (既定 3100)。`OPEN_BROWSER=0` で起動時にブラウザを開かない。
+
+### 自動試遊 (会話の不自然さの洗い出し)
+
+本物の AI に GM とプレイヤー役を任せて何ゲームも回し、登場人物の不自然な言動を審査役の AI に種類つきで挙げさせる。AI を呼ぶたびに課金されるので、少ない回数から始める。
+
+```
+npm run playtest -- --dry-run          # 作り物の AI で仕組みだけ確かめる (費用ゼロ)
+npm run playtest -- --games 3          # 既定: GM・プレイヤー役は Claude Haiku 5.5、審査役は Sonnet 5.5 (effort medium)
+npm run playtest -- --games 3 --judge anthropic:claude-haiku-5-5:medium    # 審査役も軽いモデルに
+```
+
+Claude Code では `/playtest [ゲーム数] [難易度] [GM] [プレイヤー役] [審査役]` でも回せる。各役は `haiku` / `sonnet` / `opus` (Claude Code のサブエージェント。API キー不要の MCP 版で動く) か、`gemini:gemini-3.5-flash-lite` のような `<提供元>:<モデル>` (各社の API) で指定する。例: `/playtest 3 normal gemini:gemini-3.5-flash-lite` (GM とプレイヤー役は Gemini、審査は Claude Code の Sonnet)。
+
+- API キーは、起動するとブラウザに開く入力画面で受け取る (ファイルや環境変数からは読まない。メモリにだけ置く)。
+- 結果は `playtest-results/<日時>/` に書き出す。`report.md` がまとめ (不自然さの種類ごとの件数・実例・使用量)、`game-NN.md` がゲームごとの会話と指摘。
+- `--seed` が同じなら、同じお題・性格・難易度で回る。指示文やルールを直す前と後で同じ条件を回し、指摘の件数を比べる。
+- ターンは既定で、偶数番目のゲームは上限まで使い (プレイヤー役は自分から締めない)、奇数番目は 4〜10 回目のどこかで締める (`--max-turns full` で常に上限まで、`--max-turns 10` で常に 10 回で締める)。
+- そのほかの引数 (`--difficulty`・`--player`・`--judge none`・`--out`) は [scripts/playtest/config.ts](scripts/playtest/config.ts) を参照。
 
 ## ライセンス
 

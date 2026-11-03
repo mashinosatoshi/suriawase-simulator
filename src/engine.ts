@@ -245,14 +245,17 @@ export class Engine {
   }
 
   // ---- ゲームの開始・リセット ---------------------------------------------
-  /** 「新しいシナリオを作って」。AI の wait_for_player_turn に new_game が届く。params を省くと、その難易度の初期値 (ランダムなら、ここで決める) */
-  requestNewGame(request: string, difficulty: Difficulty = "normal", params: DifficultyParams = defaultParams(difficulty)) {
+  /**
+   * 「新しいシナリオを作って」。AI の wait_for_player_turn に new_game が届く。params を省くと、その難易度の初期値 (ランダムなら、ここで決める)。
+   * theme は話題が空欄のときのお題 (省くとここで選ぶ。自動の試遊では、同じ条件で繰り返せるよう外から渡す)
+   */
+  requestNewGame(request: string, difficulty: Difficulty = "normal", params: DifficultyParams = defaultParams(difficulty), theme: Theme = pickTheme()) {
     this.resetRuntime();
     this.scenario = null;
     this.phase = "setup";
     this.generating = true;
     this.request = request.trim().slice(0, 300);
-    this.theme = this.request ? null : pickTheme();
+    this.theme = this.request ? null : theme;
     this.difficulty = difficulty;
     this.params = { ...params };
     this.changed();

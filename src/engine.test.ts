@@ -111,6 +111,9 @@ test("話題が空欄なら、ゲームが選んだお題を渡す (希望があ
   assert.ok(THEME_TOPICS.includes(theme.topic));
   assert.ok(THEME_CASTS.includes(theme.cast));
   assert.deepEqual(newGame().theme, theme); // 何度 wait しても (作り直しの再試行でも) 同じお題
+  const fixed = pickTheme(() => 0);
+  e.requestNewGame("", "normal", undefined, fixed); // 自動の試遊では、お題を外から渡せる
+  assert.deepEqual(newGame().theme, fixed);
   e.requestNewGame("ファンタジー");
   assert.equal("theme" in newGame(), false);
   assert.ok(e.startScenario(scenario()).ok);
@@ -642,6 +645,13 @@ test("返答に、隠し事を匂わせる仕草や括弧書きの動作があ�
     // 台詞の中に紛れた括弧書きの動作
     ["mayor", "（うつむく）そうさのう、わしは構わんが。", /誘導する描写「うつむ」/],
     ["mayor", "*ためらうように視線をそらす* さあ、どうかのう。", /誘導する描写/],
+    // まだ話していない事情があると示す台詞
+    ["mayor", "おおむね合っておる。ただ、ほかにも決めておきたいことがあるので、わしの方で持ち帰らせてくれ。", /「ほかにも決めておきたいことがある」/],
+    ["mayor", "他にも気がかりな事情があって、すぐには決められん。", /誘導する描写/],
+    ["mayor", "まだ話していないことがあるんじゃが、今日はよそう。", /「まだ話していないこと」/],
+    // 言えないことがあると示す台詞 (試遊で見つかったもの)
+    ["mayor", "それが何のことなのか、いまは私の口からははっきり言えません。", /誘導する描写「いまは私の口からははっきり言えません」/],
+    ["mayor", "それ以上は、今は言えないです。", /誘導する描写/],
   ];
   for (const [speaker, text, expected] of cases) {
     const e = playing("お祭りのことを教えてください。");
@@ -666,6 +676,14 @@ test("ふつうの台詞や、地の文での場面転換は差し戻されな�
     line("mayor", "ふむ…それは費用次第じゃのう。あんたはどう思う？"),
     line("narrator", "日が傾き、川面が赤く染まってきた。"),
     line("narrator", "しばらくして、二人は川岸の小屋に移った。"),
+    // 相手に尋ねる「ほかにも」や、理由を足さない持ち帰りは自然な言い方
+    line("mayor", "ほかにも気になることがあれば、遠慮なく言ってくれ。"),
+    line("mayor", "ほかにも心配なことがありますかの。"),
+    line("mayor", "あんたの方で、ほかにも困っていることがあるなら聞こう。"),
+    line("mayor", "よし、今日の話は一度持ち帰らせてくれ。"),
+    // 「何とも言えない」は、決めかねているという普通の言い方
+    line("mayor", "今は何とも言えんのう。費用を見てからじゃ。"),
+    line("mayor", "まだ何とも言えません。"),
   ];
   for (const l of natural) {
     const e = playing("お話を聞かせてください。");
