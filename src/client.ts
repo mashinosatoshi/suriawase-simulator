@@ -686,7 +686,7 @@ function randomParamsBlock(p: DifficultyParams) {
       ...PARAM_GROUPS.map(([title, keys]) =>
         h("div", { class: "pgroup" }, h("h3", {}, title), ...keys.map((k) => h("div", { class: "prow" }, h("span", { class: "plabel" }, PARAM_SPECS[k].label), h("span", {}, paramText(k, p[k]))))),
       ),
-      h("p", { class: "muted text-sm" }, `ターン数の上限: ${turnLimitOf(p)} ターン`),
+      h("p", { class: "muted text-sm" }, `ターン数の上限: ${turnLimitOf(p)} ターン + 引き出しにくい本音の分`),
     ),
   );
 }
@@ -706,13 +706,13 @@ const sectionTitle = (t: string) => h("h2", { class: "section-title" }, t);
 
 /** AI が書いた振り返り。書き終わるまでは待ち表示 */
 /**
- * スコア: どれだけ重要な本音を、手ごわい相手から引き出し、解決に導いたか。
- * 内訳は重要度の高い順に、取れた点 / 取れた最高点と、引き出し・解決それぞれの難しさを出す
+ * スコア: どれだけ重要で引き出しにくい本音を引き出し、解決に導いたか (引き出すほうを重く見る)。
+ * 内訳は点の大きい本音から順に、取れた点 / 取れた最高点と、引き出しにくさ・解決の難しさを出す
  */
 function scoreBlock(s: PublicState, score: GameScore) {
   const rate = (r: number) => `×${(r / 100).toFixed(2).replace(/0$/, "")}`;
   const rows = [...score.items]
-    .sort((a, b) => b.importance - a.importance)
+    .sort((a, b) => b.maxPoints - a.maxPoints)
     .map((x) => {
       const c = s.concerns.find((k) => k.id === x.id);
       const got = x.discoverPoints + x.resolvePoints;
@@ -720,17 +720,21 @@ function scoreBlock(s: PublicState, score: GameScore) {
       return h(
         "div",
         { class: `srow${got ? "" : " zero"}` },
-        h("span", { class: "sname" }, `${c?.category ?? x.id} (重要度 ${x.importance})`),
+        h("span", { class: "sname" }, `${c?.category ?? x.id} (重要度 ${x.importance}・引き出しにくさ ${x.revealDifficulty})`),
         h("span", { class: "spts" }, `${got} / ${x.maxPoints}`),
-        h("small", {}, `${state} — 引き出し ${x.discoverPoints} 点 (難しさ ${rate(x.discoverRate)}) · 解決 ${x.resolvePoints} 点 (難しさ ${rate(x.resolveRate)})`),
+        h("small", {}, `${state} — 引き出し ${x.discoverPoints} 点 · 解決 ${x.resolvePoints} 点 (難しさ ${rate(x.resolveRate)})`),
       );
     });
   return h(
     "div",
     { class: "score" },
     h("div", { class: "shead" }, h("span", { class: `rank r${score.rank}` }, score.rank), h("span", { class: "stotal" }, `${score.total}`, h("small", {}, ` / ${score.max} 点 (${score.percent}%)`))),
-    h("p", { class: "muted text-sm" }, "重要な本音ほど、打ち解けにくい相手・物わかりの悪い相手からほど高い点になります。引き出すと「引き出し点」、解決に導くと「解決点」が入ります。"),
-    h("details", {}, h("summary", {}, "スコアの内訳"), ...rows, score.bonus > 0 && h("div", { class: "srow" }, h("span", { class: "sname" }, "完全合意ボーナス"), h("span", { class: "spts" }, `+${score.bonus}`))),
+    h(
+      "p",
+      { class: "muted text-sm" },
+      "相手の隠れた本音を引き出すと「引き出し点」が入ります。重要な本音ほど、引き出しにくい本音 (打ち解けるまで話さない・頑なな人の本音) ほど高い点です。解決に導くと「解決点」も入ります。",
+    ),
+    h("details", {}, h("summary", {}, "スコアの内訳"), ...rows),
   );
 }
 

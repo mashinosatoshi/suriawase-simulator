@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseDifficulty, randomParams, trustGainRate } from "./difficulty.js";
+import { parseDifficulty, probesNeeded, randomParams, revealDifficulty, trustGainRate } from "./difficulty.js";
 import { Engine, stripSelfIntro, type Work } from "./engine.js";
 import { leaksSecret, replySchema, type ReplyInput, type Scenario } from "./scenario.js";
 import { discoverRate, resolveRate, scoreGame } from "./score.js";
@@ -53,6 +53,8 @@ const scenario = () => ({
   opening: [{ speaker: "mayor", text: "橋なら東の浅瀬がよかろう。それで決まりじゃ。" }],
 });
 
+/** 本音のきっかけ (reveal_hint) のうち、プレイヤーの発言が触れた話題 (本音を話すとき・probes で必須) */
+const HINT: Record<string, string> = { c1: "費用", c2: "渡し守の暮らし", c3: "村の行事", c4: "子どもや安全", c5: "工事中の川の使い方", c6: "川辺の思い出", c7: "隣村との関係" };
 const line = (speaker = "mayor", text = "ふむ…") => ({ speaker, text });
 /** 信頼度が動くターンには、その人の気分の更新が必須 */
 const calm = [{ character: "mayor", emoji: "😌", label: "安心" }];
@@ -168,15 +170,15 @@ test("公開状態に隠し情報が含まれない / 懸念ボードは空か�
 test("懸念ボードは見つけた順に増え、進行の要約はログに出ない", () => {
   const e = playing("お祭りのことを聞かせてください。");
   // c3 → c1 の順に見つかる (シナリオの並びとは無関係)
-  assert.ok(reply(e, { concern_updates: [{ id: "c3", to: "revealed", asked: "お祭りのこと" }] }).ok);
+  assert.ok(reply(e, { concern_updates: [{ id: "c3", to: "revealed", hint: HINT.c3, asked: "お祭りのこと" }] }).ok);
   assert.deepEqual(e.publicState().concerns.map((c) => [c.id, c.status]), [["c3", "revealed"]]);
   e.act({ text: BIG });
   const r2 = e.reply({
     turn: 2,
     lines: [line()],
     concern_updates: [
-      { id: "c1", to: "proposed", note: "小さな木橋にする", quote: Q1 },
-      { id: "c3", to: "proposed", note: "行列は川沿いの道へ", quote: Q3 },
+      { id: "c1", to: "proposed", hint: HINT.c1, note: "小さな木橋にする", quote: Q1 },
+      { id: "c3", to: "proposed", hint: HINT.c3, note: "行列は川沿いの道へ", quote: Q3 },
     ],
   });
   assert.ok(r2.ok, errorsOf(r2));
@@ -231,21 +233,21 @@ test("信頼度はキャラクターごと。本音を持つ人の信頼度が�
   const e = playing("渡し守さんの暮らしはどうですか？");
   assert.deepEqual(e.fullState().trust, { mayor: 6, ferry: 4 }); // シナリオで決めた、各キャラの最初の信頼度
   // c2 は渡し守 (信頼度 4) の本音で、min_trust=6。村長の信頼度は関係ない
-  const bad = reply(e, { concern_updates: [{ id: "c2", to: "revealed", asked: "渡し守さんの暮らし" }] });
+  const bad = reply(e, { concern_updates: [{ id: "c2", to: "revealed", hint: HINT.c2, asked: "渡し守さんの暮らし" }] });
   assert.equal(bad.ok, false);
   assert.match(errorsOf(bad), /ferry の信頼度 4 < 必要 6/);
-  assert.match(errorsOf(reply(e, { ...up("mayor", 2), concern_updates: [{ id: "c2", to: "revealed", asked: "渡し守さんの暮らし" }] })), /ferry の信頼度 4 < 必要 6/);
+  assert.match(errorsOf(reply(e, { ...up("mayor", 2), concern_updates: [{ id: "c2", to: "revealed", hint: HINT.c2, asked: "渡し守さんの暮らし" }] })), /ferry の信頼度 4 < 必要 6/);
   // 渡し守は頑な (打ち解けやすさ 3 → 上がり幅 40%): +2 の評価でも 0.8 しか上がらない
-  assert.match(errorsOf(reply(e, { ...up("ferry", 2), concern_updates: [{ id: "c2", to: "revealed", asked: "渡し守さんの暮らし" }] })), /ferry の信頼度 4 < 必要 6/);
+  assert.match(errorsOf(reply(e, { ...up("ferry", 2), concern_updates: [{ id: "c2", to: "revealed", hint: HINT.c2, asked: "渡し守さんの暮らし" }] })), /ferry の信頼度 4 < 必要 6/);
   assert.equal(e.phase, "ai_turn"); // 失敗しても手番は進まない
-  // 良い発言を重ねれば、少しずつ打ち解ける: 4 → 4.8 → 5.6 → 6.4
+  // 良い発言を重ねれば、少しずつ打ち解ける: 4 → 4.8 → 5.6 → 6.4 (話題に触れられた回数は、信頼度が足りないうちも数える)
   const care = (reason: string) => ({ trust_changes: [{ character: "ferry", delta: 2, reason }], moods: calmFerry });
-  must(reply(e, care("暮らしを気遣ってくれた")));
+  must(reply(e, { ...care("暮らしを気遣ってくれた"), probes: [{ id: "c2", asked: "渡し守さんの暮らし", hint: HINT.c2 }] }));
   assert.deepEqual(e.fullState().trust, { mayor: 6, ferry: 4.8 });
   e.act({ text: "渡し守さんの暮らしを、もう少し聞かせてください。" });
   must(e.reply({ turn: 2, lines: [line("ferry")], ...care("話を最後まで聞いてくれた") }));
   e.act({ text: "渡し守さんの暮らしが心配なんです。" });
-  must(e.reply({ turn: 3, lines: [line("ferry")], ...care("暮らしを本気で心配してくれた"), concern_updates: [{ id: "c2", to: "revealed", asked: "渡し守さんの暮らし" }] }));
+  must(e.reply({ turn: 3, lines: [line("ferry")], ...care("暮らしを本気で心配してくれた"), concern_updates: [{ id: "c2", to: "revealed", hint: HINT.c2, asked: "渡し守さんの暮らし" }] }));
   const s = e.publicState();
   assert.deepEqual(e.fullState().trust, { mayor: 6, ferry: 6.4 });
   assert.equal(s.concerns.find((c) => c.id === "c2")?.text, "橋ができると渡し守の仕事がなくなる");
@@ -316,7 +318,7 @@ test("信頼度は画面に出さない: 公開状態にもログにも現れず
 });
 
 test("検討中に進めるには、プレイヤーの発言からの引用が要る", () => {
-  const proposal = (quote?: string) => ({ concern_updates: [{ id: "c1", to: "proposed" as const, note: "小さな木橋にする", quote }] });
+  const proposal = (quote?: string) => ({ concern_updates: [{ id: "c1", to: "proposed" as const, hint: HINT.c1, note: "小さな木橋にする", quote }] });
 
   // 引用なし / 短すぎる
   const e1 = playing(BIG);
@@ -346,8 +348,8 @@ test("段階を飛ばせない (hidden→resolved) と、同一懸念の二重�
   assert.equal(reply(e, { concern_updates: [{ id: "c1", to: "resolved", note: "これで解決した" }] }).ok, false);
   const dup = reply(e, {
     concern_updates: [
-      { id: "c1", to: "revealed", asked: Q1 },
-      { id: "c1", to: "proposed", note: "二重更新のテスト", quote: Q1 },
+      { id: "c1", to: "revealed", hint: HINT.c1, asked: Q1 },
+      { id: "c1", to: "proposed", hint: HINT.c1, note: "二重更新のテスト", quote: Q1 },
     ],
   });
   assert.equal(dup.ok, false);
@@ -356,7 +358,7 @@ test("段階を飛ばせない (hidden→resolved) と、同一懸念の二重�
 
 test("proposed→resolved は次のターン以降 / 差し戻しもできる", () => {
   const e = playing(BIG);
-  assert.ok(reply(e, { concern_updates: [{ id: "c1", to: "proposed", note: "小さな木橋にする", quote: Q1 }] }).ok);
+  assert.ok(reply(e, { concern_updates: [{ id: "c1", to: "proposed", hint: HINT.c1, note: "小さな木橋にする", quote: Q1 }] }).ok);
   assert.equal(e.act({ text: "どうでしょう" }), null);
   // 解消には note が必要
   assert.equal(e.reply({ turn: 2, lines: [line()], concern_updates: [{ id: "c1", to: "resolved" }] }).ok, false);
@@ -370,16 +372,16 @@ test("proposed→resolved は次のターン以降 / 差し戻しもできる", 
 
   // 差し戻し
   assert.equal(e.act({ text: BIG }), null);
-  assert.ok(e.reply({ turn: 3, lines: [line()], concern_updates: [{ id: "c3", to: "proposed", note: "川沿いの道", quote: Q3 }] }).ok);
+  assert.ok(e.reply({ turn: 3, lines: [line()], concern_updates: [{ id: "c3", to: "proposed", hint: HINT.c3, note: "川沿いの道", quote: Q3 }] }).ok);
   assert.equal(e.act({ text: "いかがですか" }), null);
-  assert.ok(e.reply({ turn: 4, lines: [line()], concern_updates: [{ id: "c3", to: "revealed", note: "川沿いの道は狭く、行列が通れない" }] }).ok);
+  assert.ok(e.reply({ turn: 4, lines: [line()], concern_updates: [{ id: "c3", to: "revealed", hint: HINT.c3, note: "川沿いの道は狭く、行列が通れない" }] }).ok);
   assert.equal(e.publicState().concerns[1].status, "revealed");
   assert.equal(e.fullState().concerns?.[2].proposal, undefined); // 差し戻しで案は取り下げられる
 });
 
 test("即決: 本音が見えた懸念は、プレイヤーの案にその場で合意できる (引用が要る / 歩み寄りでは使えない)", () => {
   const e = playing("お祭りのことを聞かせてください。");
-  assert.ok(reply(e, { concern_updates: [{ id: "c3", to: "revealed", asked: "お祭りのこと" }] }).ok);
+  assert.ok(reply(e, { concern_updates: [{ id: "c3", to: "revealed", hint: HINT.c3, asked: "お祭りのこと" }] }).ok);
   e.act({ text: BIG });
   const instant = (u: object = {}) => e.reply({ turn: 2, lines: [line()], concern_updates: [{ id: "c3", to: "resolved" as const, note: "行列は川沿いの道を通す", checks: CHECKS.c3, ...u }] });
   // 案を出したのがプレイヤーであることは、検討中に進めるときと同じく引用で確かめる
@@ -395,7 +397,7 @@ test("即決: 本音が見えた懸念は、プレイヤーの案にその場で
 
   // 「締める」のターンでも、最後の案にその場で合意できる
   const e2 = playing("お祭りのことを聞かせてください。");
-  assert.ok(reply(e2, { concern_updates: [{ id: "c3", to: "revealed", asked: "お祭りのこと" }] }).ok);
+  assert.ok(reply(e2, { concern_updates: [{ id: "c3", to: "revealed", hint: HINT.c3, asked: "お祭りのこと" }] }).ok);
   e2.act({ text: BIG }, true);
   must(e2.reply({ turn: 2, lines: [line()], concern_updates: [{ id: "c3", to: "resolved", note: "行列は川沿いの道を通す", quote: Q3, checks: CHECKS.c3 }], epilogue: "続きはまた今度。" }));
   assert.equal(e2.phase, "ended");
@@ -404,10 +406,10 @@ test("即決: 本音が見えた懸念は、プレイヤーの案にその場で
 
 test("譲れない本音は即決できず、検討中で一度確かめてから解消する", () => {
   const e = playing("費用のことが気になります。");
-  assert.ok(reply(e, { concern_updates: [{ id: "c1", to: "revealed", asked: "費用のこと" }] }).ok);
+  assert.ok(reply(e, { concern_updates: [{ id: "c1", to: "revealed", hint: HINT.c1, asked: "費用のこと" }] }).ok);
   e.act({ text: BIG });
   assert.match(errorsOf(e.reply({ turn: 2, lines: [line()], concern_updates: [{ id: "c1", to: "resolved", note: "小さな木橋で合意", quote: Q1 }] })), /譲れない本音.*本当にそれで大丈夫か/);
-  must(e.reply({ turn: 2, lines: [line("mayor", "木橋で、本当に大水に耐えられるかのう？")], concern_updates: [{ id: "c1", to: "proposed", note: "小さな木橋にする", quote: Q1 }] }));
+  must(e.reply({ turn: 2, lines: [line("mayor", "木橋で、本当に大水に耐えられるかのう？")], concern_updates: [{ id: "c1", to: "proposed", hint: HINT.c1, note: "小さな木橋にする", quote: Q1 }] }));
   e.act({ text: "毎年の点検は隣村が受け持ちます。" });
   must(e.reply({ turn: 3, lines: [line("mayor", "それなら安心じゃ。")], concern_updates: [{ id: "c1", to: "resolved", note: "小さな木橋で、点検は隣村が受け持つ", checks: CHECKS.c1 }] }));
   assert.equal(e.publicState().concerns[0].status, "resolved");
@@ -424,7 +426,7 @@ test("「締める」で終了: epilogue が必須で、検討中に進めるこ
   const e = started();
   e.act({ text: BIG }, true);
   assert.match(work(e).note, /「締める」/);
-  assert.match(errorsOf(reply(e, { concern_updates: [{ id: "c1", to: "proposed", note: "小さな木橋にする", quote: Q1 }], epilogue: "また。" })), /「締める」のターン/);
+  assert.match(errorsOf(reply(e, { concern_updates: [{ id: "c1", to: "proposed", hint: HINT.c1, note: "小さな木橋にする", quote: Q1 }], epilogue: "また。" })), /「締める」のターン/);
   const noEpilogue = reply(e);
   assert.equal(noEpilogue.ok, false);
   assert.match(errorsOf(noEpilogue), /epilogue/);
@@ -440,12 +442,17 @@ test("「締める」で終了: epilogue が必須で、検討中に進めるこ
 
 /**
  * 5 つの懸念を 1 ターンに 1 つずつ見つけて (提案が当たって未発見からいきなり検討中) 解消していき、
- * 最後の c2 の解消を待つ状態 (ターン 6 の返答待ち) にする。見つかる本音は 1 回の返答で 1 つまでなので、まとめては進めない
+ * 最後の c2 の解消を待つ状態 (ターン 6 の返答待ち) にする。渡し守の本音 (c2・c5) は引き出しにくく、先に 1 度ずつ話題に触れておく
  */
 function nearlyAgreed() {
   const e = playing(BIG);
   // c4 (村長) と c2・c5 (渡し守) は信頼度が要る: 村長 6→7。渡し守は頑なで +2 の評価でも 0.8 ずつなので、3 ターンかけて 4→6.4
-  const r1 = reply(e, { trust_changes: [{ character: "mayor", delta: 1 }, { character: "ferry", delta: 2 }], moods: [...calm, ...calmFerry], concern_updates: [{ id: "c1", to: "proposed", note: "小さな木橋", quote: Q1 }] });
+  const r1 = reply(e, {
+    trust_changes: [{ character: "mayor", delta: 1 }, { character: "ferry", delta: 2 }],
+    moods: [...calm, ...calmFerry],
+    concern_updates: [{ id: "c1", to: "proposed", hint: HINT.c1, note: "小さな木橋", quote: Q1 }],
+    probes: [{ id: "c2", asked: Q2, hint: HINT.c2 }],
+  });
   assert.ok(r1.ok, errorsOf(r1));
   const warm = { trust_changes: [{ character: "ferry", delta: 2 }], moods: calmFerry };
   // 毎ターン、前のターンの案で合意しつつ、次の懸念に案が当たる
@@ -453,7 +460,8 @@ function nearlyAgreed() {
   let prev = "c1";
   next.forEach(([id, note, quote], i) => {
     e.act({ text: BIG });
-    const r = e.reply({ turn: i + 2, lines: [line()], ...(i < 2 ? warm : {}), concern_updates: [{ id: prev, to: "resolved", note: `${prev} で合意`, checks: CHECKS[prev] }, { id, to: "proposed", note, quote }] });
+    const probes = i === 0 ? [{ id: "c5", asked: Q5, hint: HINT.c5 }] : undefined;
+    const r = e.reply({ turn: i + 2, lines: [line()], ...(i < 2 ? warm : {}), probes, concern_updates: [{ id: prev, to: "resolved", note: `${prev} で合意`, checks: CHECKS[prev] }, { id, to: "proposed", hint: HINT[id], note, quote }] });
     assert.ok(r.ok, errorsOf(r));
     prev = id;
   });
@@ -462,20 +470,87 @@ function nearlyAgreed() {
 }
 const resolveLast = [{ id: "c2", to: "resolved" as const, note: "c2 で合意", checks: CHECKS.c2 }];
 
-test("1 回の返答で見つかる本音は 1 つまで (複数キャラでも、提案が当たった場合も数える)", () => {
+test("1 回の返答で見つかる本音の数は縛らない。ただし発言の同じ部分を、複数の本音のきっかけにはできない", () => {
+  // 予算とお祭り、別々の話題に触れていれば、2 つとも話してよい
   const e = playing("お祭りと予算のことを教えてください。");
-  const two = reply(e, { concern_updates: [{ id: "c1", to: "revealed", asked: "予算のことを教えて" }, { id: "c3", to: "revealed", asked: "お祭りと予算" }] });
-  assert.equal(two.ok, false);
-  assert.match(errorsOf(two), /見つけられる本音は 1 つまで.*c1, c3/);
-  assert.equal(e.publicState().concerns.length, 0); // 何も反映されない
-  // 本音 1 つ + 提案が当たって未発見からいきなり検討中、も 2 つと数える
+  must(reply(e, { concern_updates: [{ id: "c1", to: "revealed", hint: HINT.c1, asked: "予算のこと" }, { id: "c3", to: "revealed", hint: HINT.c3, asked: "お祭りと" }] }));
+  assert.deepEqual(e.publicState().concerns.map((c) => [c.id, c.status]), [["c1", "revealed"], ["c3", "revealed"]]);
+  // 発言の同じ部分 (片方がもう片方を含む) を、2 つの本音のきっかけにはできない
+  const e2 = playing("お祭りと予算のことを教えてください。");
+  const same = reply(e2, { concern_updates: [{ id: "c1", to: "revealed", hint: HINT.c1, asked: "お祭りと予算のこと" }, { id: "c3", to: "revealed", hint: HINT.c3, asked: "お祭りと予算" }] });
+  assert.match(errorsOf(same), /懸念 "c1" と "c3" のきっかけ.*同じ部分/);
+  assert.equal(e2.publicState().concerns.length, 0); // 何も反映されない
+  // 話題に触れたが話さない本音 (probes) も同じ
+  assert.match(errorsOf(reply(e2, { concern_updates: [{ id: "c1", to: "revealed", hint: HINT.c1, asked: "予算のこと" }], probes: [{ id: "c2", asked: "予算のこと", hint: HINT.c2 }] })), /同じ部分/);
+  // 本音 1 つ + 提案が当たって未発見からいきなり検討中、も別の部分なら通る
+  const e3 = playing(BIG);
+  must(reply(e3, { concern_updates: [{ id: "c3", to: "revealed", hint: HINT.c3, asked: Q3 }, { id: "c1", to: "proposed", hint: HINT.c1, note: "小さな木橋", quote: Q1 }] }));
+  assert.deepEqual(e3.publicState().concerns.map((c) => [c.id, c.status]), [["c3", "revealed"], ["c1", "proposed"]]);
+});
+
+test("本音を話すには、発言が reveal_hint のどの話題に触れたか (hint) を、reveal_hint から抜き出して示す", () => {
+  const e = playing("村の予算はどのくらいですか？");
+  const reveal = (hint?: string) => reply(e, { concern_updates: [{ id: "c1", to: "revealed", asked: "村の予算", hint }] });
+  assert.match(errorsOf(reveal()), /懸念 "c1": hint が必要です/);
+  assert.match(errorsOf(reveal("お金のこと")), /reveal_hint に見つかりません/); // 言い換えは通らない
+  assert.match(errorsOf(reveal("を尋ねる")), /話題そのものが入っていません/); // 「尋ねる」だけでは、どの話題か分からない
+  assert.doesNotMatch(errorsOf(reveal("を尋ねる")), /費用や工期/); // エラーに reveal_hint の中身は書かない (画面に出ることがある)
+  // 提案が当たって、未発見からいきなり検討中にするときも同じ
   const e2 = playing(BIG);
-  assert.match(errorsOf(reply(e2, { concern_updates: [{ id: "c3", to: "revealed", asked: Q3 }, { id: "c1", to: "proposed", note: "小さな木橋", quote: Q1 }] })), /1 つまで/);
-  // 1 つなら通る。すでに見つかっている懸念の進行は数えない
-  assert.ok(reply(e2, { concern_updates: [{ id: "c3", to: "revealed", asked: Q3 }] }).ok);
-  e2.act({ text: BIG });
-  assert.ok(e2.reply({ turn: 2, lines: [line()], concern_updates: [{ id: "c3", to: "proposed", note: "川沿いの道", quote: Q3 }, { id: "c1", to: "revealed", asked: Q1 }] }).ok);
-  assert.deepEqual(e2.publicState().concerns.map((c) => [c.id, c.status]), [["c3", "proposed"], ["c1", "revealed"]]);
+  assert.match(errorsOf(reply(e2, { concern_updates: [{ id: "c1", to: "proposed", note: "小さな木橋", quote: Q1 }] })), /hint が必要です/);
+  must(reveal("費用や工期"));
+  // AI には、未発見の本音ごとに reveal_hint が毎ターン渡る
+  e.act({ text: "お祭りはいつですか？" });
+  assert.equal(work(e).digest.concerns.find((c) => c.id === "c3")?.reveal_hint, "村の行事や慣習を尋ねる");
+  assert.equal(work(e).digest.concerns.find((c) => c.id === "c1")?.reveal_hint, undefined); // 見つかった本音には渡さない
+});
+
+test("引き出しにくさ: 打ち解けるまでに上げる段数と、持ち主の頑なさで決まる / 引き出しにくい本音ほど、話題に何度か触れないと話さない", () => {
+  assert.equal(revealDifficulty(1, 6, 9), 1); // 最初から話せる本音は、頑なさに関係なく 1
+  assert.equal(revealDifficulty(3, 3, 1), 1);
+  assert.equal(revealDifficulty(7, 6, 9), 2); // 1 段上げる + すぐ心を開く人 (0)
+  assert.equal(revealDifficulty(6, 4, 3), 5); // 2 段上げる + 頑な (+2)
+  assert.equal(revealDifficulty(6, 4, 5), 4); // 打ち解けやすさがふつう (+1)
+  assert.equal(revealDifficulty(9, 1, 1), 10); // とても頑な (+3)。上限は 10
+  assert.deepEqual([1, 3, 4, 6, 7, 10].map(probesNeeded), [1, 1, 2, 2, 3, 3]);
+
+  // 渡し守の本音 c2 (信頼度 4 → 6 の 2 段 + 頑な 2) は引き出しにくさ 5: 別々のターンで話題に 2 回触れないと話さない
+  const e = playing("川の仕事は長いんですか？");
+  const care = { trust_changes: [{ character: "ferry", delta: 2 }], moods: calmFerry };
+  must(reply(e, care)); // 4 → 4.8
+  e.act({ text: "毎日、大変でしょう。" });
+  must(e.reply({ turn: 2, lines: [line("ferry")], ...care })); // → 5.6
+  e.act({ text: "渡し守さんの暮らしはどうですか？" });
+  const c2 = () => work(e).digest.concerns.find((c) => c.id === "c2")!;
+  assert.deepEqual([c2().reveal_difficulty, c2().probes, c2().probes_needed], [5, 0, 2]);
+  // 信頼度は足りた (→ 6.4) が、話題に触れたのはこれが 1 回目
+  const reveal = { concern_updates: [{ id: "c2", to: "revealed" as const, asked: "渡し守さんの暮らし", hint: HINT.c2 }] };
+  assert.match(errorsOf(e.reply({ turn: 3, lines: [line("ferry")], ...care, ...reveal })), /引き出しにくい本音です。話題に触れられたターンは、今回を含めて 1 \(話すのに要るのは 2\)/);
+  // 本音は話さず、触れられた回数として記録する
+  must(e.reply({ turn: 3, lines: [line("ferry", "暮らしか。まあ、食うには困っとらん。")], ...care, probes: [{ id: "c2", asked: "渡し守さんの暮らし", hint: HINT.c2 }] }));
+  assert.equal(e.publicState().concerns.length, 0); // まだ見つかっていない
+  e.act({ text: "渡し守さんの暮らしのこと、もう少し聞かせてください。" });
+  assert.deepEqual([c2().probes, c2().probes_needed], [1, 2]);
+  must(e.reply({ turn: 4, lines: [line("ferry")], ...reveal }));
+  assert.deepEqual(e.publicState().concerns.map((c) => [c.id, c.status]), [["c2", "revealed"]]);
+});
+
+test("probes に入れるのは、話題に触れられたが話さない未発見の本音だけ (発言からの引用と hint が要る)", () => {
+  const e = playing("渡し守さんの暮らしはどうですか？");
+  const probe = (...probes: Array<{ id: string; asked: string; hint: string }>) => errorsOf(reply(e, { probes }));
+  assert.match(probe({ id: "zzz", asked: "渡し守さんの暮らし", hint: HINT.c2 }), /probes: 懸念 "zzz" は存在しません/);
+  assert.match(probe({ id: "c2", asked: "仕事のこと", hint: HINT.c2 }), /asked が、プレイヤーの今回の発言に見つかりません/);
+  assert.match(probe({ id: "c2", asked: "渡し守さんの暮らし", hint: "収入" }), /reveal_hint に見つかりません/);
+  assert.match(probe({ id: "c2", asked: "渡し守さんの暮らし", hint: HINT.c2 }, { id: "c2", asked: "渡し守さんの暮らし", hint: HINT.c2 }), /重複/);
+  assert.equal(probe({ id: "c2", asked: "渡し守さんの暮らし", hint: HINT.c2 }), "");
+  assert.equal(e.fullState().concerns!.find((c) => c.id === "c2")!.probes, 1);
+  // 話す本音を probes にも入れない / 見つかった本音は入れない
+  const e2 = playing("村の予算はどのくらいですか？");
+  const reveal = { concern_updates: [{ id: "c1", to: "revealed" as const, asked: "村の予算", hint: HINT.c1 }] };
+  assert.match(errorsOf(reply(e2, { ...reveal, probes: [{ id: "c1", asked: "どのくらい", hint: HINT.c1 }] })), /concern_updates でも進めています/);
+  must(reply(e2, reveal));
+  e2.act({ text: "村の予算は、もう決まっていますか？" });
+  assert.match(errorsOf(e2.reply({ turn: 2, lines: [line()], probes: [{ id: "c1", asked: "村の予算", hint: HINT.c1 }] })), /もう本音が見えています/);
 });
 
 test("全懸念を解消すると完全合意で自動終了する", () => {
@@ -493,10 +568,10 @@ test("ターン上限で終了し、半分未満の解消なら持ち帰り", ()
   const e = new Engine();
   e.startScenario(scenario());
   const limit = e.publicState().scenario!.turnLimit;
-  assert.equal(limit, 5 * 3 + 4); // 普通: 懸念 5 × 3 + 4
+  assert.equal(limit, 5 * 3 + 4 + 2); // 普通: 懸念 5 × 3 + 4、引き出しにくい本音 (c2・c5) の分 +2
   for (let t = 1; t <= limit; t++) {
     assert.equal(e.act({ text: t === 1 ? BIG : `発言${t}` }), null);
-    const updates = t === 1 ? [{ id: "c1", to: "proposed" as const, note: "小さな木橋にする", quote: Q1 }] : t === 2 ? [{ id: "c1", to: "resolved" as const, note: "小さな橋で合意", checks: CHECKS.c1 }] : [];
+    const updates = t === 1 ? [{ id: "c1", to: "proposed" as const, hint: HINT.c1, note: "小さな木橋にする", quote: Q1 }] : t === 2 ? [{ id: "c1", to: "resolved" as const, note: "小さな橋で合意", checks: CHECKS.c1 }] : [];
     const last = t === limit;
     const r = e.reply({ turn: t, lines: [line()], concern_updates: updates, epilogue: last ? "時間切れだ。" : undefined });
     assert.ok(r.ok, errorsOf(r));
@@ -536,7 +611,7 @@ test("waitForWork: 仕事が来たら待っている側が起きる / タイム�
 /** 「締める」で終わらせた状態 (c1 だけ見つかっている) */
 function endedWithOneFound() {
   const e = playing("予算はどのくらいですか？");
-  assert.ok(reply(e, { concern_updates: [{ id: "c1", to: "revealed", asked: "予算はどのくらい" }] }).ok);
+  assert.ok(reply(e, { concern_updates: [{ id: "c1", to: "revealed", hint: HINT.c1, asked: "予算はどのくらい" }] }).ok);
   e.act({ text: "今日はここまでにします" }, true);
   assert.ok(e.reply({ turn: 2, lines: [line()], epilogue: "また話そう。" }).ok);
   assert.equal(e.phase, "ended");
@@ -594,7 +669,7 @@ test("振り返りは終了後だけ。解消済みの懸念には助言を付�
 
   // c1 だけ解消して「締める」 → 助言が要るのは c2〜c5
   const e = playing(BIG);
-  assert.ok(reply(e, { concern_updates: [{ id: "c1", to: "proposed", note: "小さな木橋", quote: Q1 }] }).ok);
+  assert.ok(reply(e, { concern_updates: [{ id: "c1", to: "proposed", hint: HINT.c1, note: "小さな木橋", quote: Q1 }] }).ok);
   e.act({ text: "どうでしょう" });
   assert.ok(e.reply({ turn: 2, lines: [line()], concern_updates: [{ id: "c1", to: "resolved", note: "小さな橋で合意", checks: CHECKS.c1 }] }).ok);
   e.act({ text: "ここまでにしましょう" }, true);
@@ -724,7 +799,7 @@ test("毎ターン、破られやすい決まり (聞かれていない本音・
 
 test("解消には、解消条件との照らし合わせ (checks) が要る: 点の抜き出し・覆い方・引用の実在", () => {
   const e = playing(BIG);
-  must(reply(e, { concern_updates: [{ id: "c1", to: "proposed", note: "小さな木橋にする", quote: Q1 }] }));
+  must(reply(e, { concern_updates: [{ id: "c1", to: "proposed", hint: HINT.c1, note: "小さな木橋にする", quote: Q1 }] }));
   e.act({ text: "それで進めましょう。" });
   const resolve = (checks?: Array<{ point: string; quote: string }>) => e.reply({ turn: 2, lines: [line()], concern_updates: [{ id: "c1", to: "resolved", note: "小さな木橋で予算内に収める", checks }] });
   assert.match(errorsOf(resolve()), /照らし合わせ \(checks\)が必要/);
@@ -768,10 +843,10 @@ const RIPE_C1 = [{ point: "村の予算内に収まる規模の案", quote: "小
 function ripe(trustBump = true) {
   const e = started();
   e.act({ text: "村の予算はどのくらいですか？お祭りのことも聞かせてください。" });
-  const r1 = e.reply({ turn: 1, lines: [line()], ...(trustBump ? up("mayor") : {}), concern_updates: [{ id: "c1", to: "revealed", asked: "村の予算はどのくらい" }] });
+  const r1 = e.reply({ turn: 1, lines: [line()], ...(trustBump ? up("mayor") : {}), concern_updates: [{ id: "c1", to: "revealed", hint: HINT.c1, asked: "村の予算はどのくらい" }] });
   assert.ok(r1.ok, errorsOf(r1));
   e.act({ text: T2 });
-  assert.ok(e.reply({ turn: 2, lines: [line()], concern_updates: [{ id: "c3", to: "revealed", asked: "お祭りの行列" }] }).ok);
+  assert.ok(e.reply({ turn: 2, lines: [line()], concern_updates: [{ id: "c3", to: "revealed", hint: HINT.c3, asked: "お祭りの行列" }] }).ok);
   e.act({ text: T3 });
   return e;
 }
@@ -849,7 +924,7 @@ test("差し戻された後の歩み寄りは、差し戻し以降の発言が�
   const e = ripe();
   assert.ok(reply3(e, [walk("c1", E1)]).ok); // ターン 3: 歩み寄り (since=1, 根拠はターン 2・3)
   e.act({ text: "それだと、まだ足りませんか？" });
-  assert.ok(e.reply({ turn: 4, lines: [line()], concern_updates: [{ id: "c1", to: "revealed", note: "冬の備蓄まで考えたい" }] }).ok); // 差し戻し: since=4
+  assert.ok(e.reply({ turn: 4, lines: [line()], concern_updates: [{ id: "c1", to: "revealed", hint: HINT.c1, note: "冬の備蓄まで考えたい" }] }).ok); // 差し戻し: since=4
   e.act({ text: "冬の備蓄は、橋の費用とは別に積み立てましょう。" });
   assert.ok(e.reply({ turn: 5, lines: [line()] }).ok);
   e.act({ text: "毎年の積み立てなら、負担も少なくて済みます。" });
@@ -1051,7 +1126,7 @@ test("最初の信頼度は登場人物ごと (平均は難易度の値) / 冒�
 test("簡単: 物わかりがよく、本音が見えた後 1 ターン向き合えば相手から歩み寄れる", () => {
   const e = startedAt("easy");
   e.act({ text: "村の予算はどのくらいですか？" });
-  must(e.reply({ turn: 1, lines: [line()], concern_updates: [{ id: "c1", to: "revealed", asked: "村の予算" }] }));
+  must(e.reply({ turn: 1, lines: [line()], concern_updates: [{ id: "c1", to: "revealed", hint: HINT.c1, asked: "村の予算" }] }));
   e.act({ text: T3 });
   const w = work(e);
   assert.equal(w.difficulty, "簡単");
@@ -1067,7 +1142,7 @@ test("簡単: 物わかりがよく、本音が見えた後 1 ターン向き合
 test("難しい: 物わかりが悪く打ち解けにくい。歩み寄りには高い信頼度と 3 ターン分の積み重ねが要る", () => {
   const e = startedAt("hard");
   e.act({ text: "村の予算はどのくらいですか？" });
-  must(e.reply({ turn: 1, lines: [line()], concern_updates: [{ id: "c1", to: "revealed", asked: "村の予算" }] }));
+  must(e.reply({ turn: 1, lines: [line()], concern_updates: [{ id: "c1", to: "revealed", hint: HINT.c1, asked: "村の予算" }] }));
   // ターン 2〜5: 予算の話を重ねる。村長は打ち解けにくく (打ち解けやすさ 4 → 上がり幅 50%)、+2 の評価でも 1 ずつ: 信頼度 3 → 7
   [T2, T3, "木橋なら、毎年の修繕費も安く済みますね。", "村の負担が軽くなる形を探したいんです。"].forEach((text, i) => {
     e.act({ text });
@@ -1092,16 +1167,22 @@ test("難しい: 物わかりが悪く打ち解けにくい。歩み寄りには
   assert.equal(e.publicState().concerns[0].status, "proposed");
 });
 
-test("ターン数の上限は難易度で決まる (懸念の数 × 1 つあたりのターン数 + 4)。AI が決めた turns は使わない", () => {
-  for (const [level, limit] of [["easy", 4 * 4 + 4], ["normal", 5 * 3 + 4], ["hard", 7 * 2 + 4]] as const) {
+test("ターン数の上限は難易度で決まる (懸念の数 × 1 つあたりのターン数 + 4)。引き出しにくい本音の分だけ増える。AI が決めた turns は使わない", () => {
+  for (const [level, base] of [["easy", 4 * 4 + 4], ["normal", 5 * 3 + 4], ["hard", 7 * 2 + 4]] as const) {
     const e = new Engine();
     e.requestNewGame("", level);
-    assert.equal((e.pendingWork() as Extract<Work, { type: "new_game" }>).difficulty.turns, limit, level); // AI にも伝わる
+    assert.equal((e.pendingWork() as Extract<Work, { type: "new_game" }>).difficulty.turns, base, level); // AI にも伝わる
     assert.ok(e.startScenario({ ...scenarioOf(level), turns: 99 }).ok);
-    assert.equal(e.publicState().scenario!.turnLimit, limit, level);
     e.act({ text: "こんにちは" });
-    assert.equal(work(e).turns_left, limit - 1);
+    // 本音ごとに、話すまでに話題に触れる回数 - 1 ターンを足す
+    const extra = work(e).digest.concerns.reduce((n, c) => n + c.probes_needed! - 1, 0);
+    assert.equal(e.publicState().scenario!.turnLimit, base + extra, level);
+    assert.equal(work(e).turns_left, base + extra - 1);
+    if (level === "hard") assert.ok(extra > 0); // 難しいでは、打ち解けにくい相手の本音ほど回数が要る
   }
+  // 普通のシナリオ: 渡し守の本音 c2・c5 (引き出しにくさ 5) が 2 回ずつ要るので +2
+  const e = playing();
+  assert.equal(e.publicState().scenario!.turnLimit, 5 * 3 + 4 + 2);
 });
 
 test("最初から話せる本音の数は難易度で決まり、ちょうどその数でないシナリオは採用しない", () => {
@@ -1203,15 +1284,17 @@ test("ブラウザから届いた難易度とパラメータを確かめる", ()
 /**
  * ids の順に 1 ターンに 1 つずつ提案が当たって解消していき、最後は「締める」で終える。
  * 信頼度が要る本音 (村長の c4、渡し守の c2・c5) にも届くよう、最初の 3 ターンで村長 6→7・渡し守 4→6.4 にしておく
- * (渡し守は頑なで、+2 の評価でも 0.8 ずつしか上がらない)
+ * (渡し守は頑なで、+2 の評価でも 0.8 ずつしか上がらない)。渡し守の本音は引き出しにくいので、その間に 1 度ずつ話題に触れておく
  */
 function endAfterResolving(ids: string[]) {
   const quotes: Record<string, string> = { c1: Q1, c2: Q2, c3: Q3, c4: Q4, c5: Q5 };
-  const propose = (id: string) => ({ id, to: "proposed" as const, note: `${id} の案`, quote: quotes[id] });
+  const propose = (id: string) => ({ id, to: "proposed" as const, hint: HINT[id], note: `${id} の案`, quote: quotes[id] });
+  const probeOf = { 1: { id: "c2", asked: Q2, hint: HINT.c2 }, 2: { id: "c5", asked: Q5, hint: HINT.c5 } } as Record<number, { id: string; asked: string; hint: string }>;
   const e = started();
   for (let t = 1; t <= 3; t++) {
-    e.act({ text: "皆さんのお考えを、もう少し聞かせてください。" });
-    must(e.reply({ turn: t, lines: [line()], trust_changes: [...(t === 1 ? [{ character: "mayor", delta: 1 }] : []), { character: "ferry", delta: 2 }], moods: [...calm, ...calmFerry] }));
+    e.act({ text: BIG });
+    const probes = probeOf[t] ? [probeOf[t]] : undefined;
+    must(e.reply({ turn: t, lines: [line()], trust_changes: [...(t === 1 ? [{ character: "mayor", delta: 1 }] : []), { character: "ferry", delta: 2 }], moods: [...calm, ...calmFerry], probes }));
   }
   e.act({ text: BIG });
   must(e.reply({ turn: 4, lines: [line()], concern_updates: [propose(ids[0])] }));
@@ -1239,7 +1322,7 @@ test("結末は重要度で決まる: 妥協案は、譲れない本音がすべ
 test("本音の重要度: ゲーム中は画面に送らない (終了後の答え合わせだけ) / AI に毎ターン渡る / 譲れない本音の数は難易度で決まる", () => {
   const e = playing("村の予算はどのくらいですか？");
   assert.deepEqual(work(e).digest.concerns.map((c) => [c.id, c.importance]), [["c1", 9], ["c2", 7], ["c3", 4], ["c4", 6], ["c5", 5]]);
-  must(reply(e, { concern_updates: [{ id: "c1", to: "revealed", asked: "村の予算" }] }));
+  must(reply(e, { concern_updates: [{ id: "c1", to: "revealed", hint: HINT.c1, asked: "村の予算" }] }));
   // 見つかった本音でも、相手の思いの強さ (重要度) は見えない
   assert.deepEqual(e.publicState().concerns.map((c) => [c.id, c.importance]), [["c1", undefined]]);
   assert.ok(!JSON.stringify(e.publicState()).includes("importance"));
@@ -1274,35 +1357,38 @@ test("本音の重要度: ゲーム中は画面に送らない (終了後の答�
 
 // ---- スコア ---------------------------------------------------------------------------------
 // 普通のシナリオ: 村長 (信頼度 6・打ち解けやすさ 9・物わかり 6)、渡し守 (信頼度 4・打ち解けやすさ 3・物わかり 4)。
-// 本音ごとの最高点 (引き出し + 解決): c1 18+72=90 / c2 25+67=92 / c3 8+32=40 / c4 15+48=63 / c5 18+48=66 (合計 351)。
-// 完全合意ボーナスは 2 割 (70) で、満点は 421
+// 引き出しにくさは c1・c3 が 1 (最初から話せる)、c4 が 2、渡し守の c2・c5 が 5。
+// 本音ごとの最高点 (引き出し + 解決): c1 45+29=74 / c2 70+27=97 / c3 20+13=33 / c4 38+19=57 / c5 50+19=69 (満点 330。うち引き出し点 223)
 
-test("スコアの難しさ: 打ち解けるまで話さない本音ほど (持ち主が頑なほど) 引き出しが、物わかりが悪く信頼されていない相手ほど解決が難しい", () => {
-  assert.equal(discoverRate(1, 6, 9), 100); // 最初から話せる
-  assert.equal(discoverRate(6, 4, 10), 150); // 信頼度を 2 上げないと話さない (1 段 +25%)
-  assert.equal(discoverRate(6, 4, 3), 178); // 持ち主が頑な (打ち解けやすさ 3) なら 1 段 +39%
-  assert.equal(discoverRate(9, 1, 1), 444);
+test("スコアの倍率: 引き出しにくい本音ほど引き出し点が、物わかりが悪く信頼されていない相手ほど解決点が高い", () => {
+  assert.equal(discoverRate(1), 100); // 最初から話せる
+  assert.equal(discoverRate(5), 200); // 引き出しにくさ 1 上がるごとに +25%
+  assert.equal(discoverRate(10), 325);
   assert.equal(resolveRate(10, 10), 100);
   assert.equal(resolveRate(6, 6), 160);
   assert.equal(resolveRate(1, 1), 235);
 });
 
-test("スコア: 重要な本音を手ごわい相手から引き出し、解決するほど高い / ランクは満点に対する割合", () => {
-  // 妥協案 (c1・c2 を解決、ほかは見つけられなかった): 90 + 92 = 182 点 (43%)
+test("スコア: 重要で引き出しにくい本音を引き出すほど高い (解決点より重い) / 完全合意のボーナスは無い / ランクは満点に対する割合", () => {
+  // 妥協案 (c1・c2 を解決、ほかは見つけられなかった): 74 + 97 = 171 点 (51%)
   const two = endAfterResolving(["c1", "c2"]).score;
-  assert.deepEqual([two.total, two.max, two.percent, two.rank, two.bonus], [182, 421, 43, "C", 0]);
+  assert.deepEqual([two.total, two.max, two.percent, two.rank], [171, 330, 51, "C"]);
+  assert.ok(!("bonus" in two));
   const c2 = two.items.find((x) => x.id === "c2")!;
-  assert.deepEqual([c2.discovered, c2.resolved, c2.discoverRate, c2.resolveRate, c2.discoverPoints, c2.resolvePoints], [true, true, 178, 190, 25, 67]);
-  assert.deepEqual(two.items.find((x) => x.id === "c3"), { id: "c3", importance: 4, discovered: false, resolved: false, discoverRate: 100, resolveRate: 160, discoverPoints: 0, resolvePoints: 0, maxPoints: 40 });
-  // 完全合意: すべての点 + ボーナス 2 割で満点
+  assert.deepEqual([c2.revealDifficulty, c2.discovered, c2.resolved, c2.discoverRate, c2.resolveRate, c2.discoverPoints, c2.resolvePoints], [5, true, true, 200, 190, 70, 27]);
+  assert.deepEqual(two.items.find((x) => x.id === "c3"), { id: "c3", importance: 4, revealDifficulty: 1, discovered: false, resolved: false, discoverRate: 100, resolveRate: 160, discoverPoints: 0, resolvePoints: 0, maxPoints: 33 });
+  // 完全合意: すべての点で満点 (ボーナスは足さない)
   const e = nearlyAgreed();
   must(e.reply({ turn: 6, lines: [line()], epilogue: "橋は無事にかかった。", concern_updates: resolveLast }));
   const full = e.publicState().ending!.score;
-  assert.deepEqual([full.total, full.bonus, full.percent, full.rank], [421, 70, 100, "S"]);
-  // 引き出しただけ (c1 を見つけて持ち帰り): 引き出し点 18 だけ
+  assert.deepEqual([full.total, full.max, full.percent, full.rank], [330, 330, 100, "S"]);
+  // すべて引き出したが、何も解決できなかった: 引き出し点だけで 223 点 (67%)。2 つを解決した妥協案より高い
+  const allFound = scoreGame(scenario() as Scenario, ["revealed", "revealed", "revealed", "proposed", "revealed"]);
+  assert.deepEqual([allFound.total, allFound.percent, allFound.rank], [223, 67, "B"]);
+  // 引き出しただけ (c1 を見つけて持ち帰り): 引き出し点 45 だけ
   const one = endedWithOneFound().publicState().ending!.score;
-  assert.deepEqual([one.total, one.rank], [18, "D"]);
-  assert.deepEqual(one.items.find((x) => x.id === "c1"), { id: "c1", importance: 9, discovered: true, resolved: false, discoverRate: 100, resolveRate: 160, discoverPoints: 18, resolvePoints: 0, maxPoints: 90 });
+  assert.deepEqual([one.total, one.rank], [45, "D"]);
+  assert.deepEqual(one.items.find((x) => x.id === "c1"), { id: "c1", importance: 9, revealDifficulty: 1, discovered: true, resolved: false, discoverRate: 100, resolveRate: 160, discoverPoints: 45, resolvePoints: 0, maxPoints: 74 });
 });
 
 test("スコア: 同じ結果でも、相手が手ごわいほど点が高い / 振り返りを書く AI にも渡る", () => {
@@ -1314,14 +1400,18 @@ test("スコア: 同じ結果でも、相手が手ごわいほど点が高い / 
   tough.concerns[1].min_trust = 8;
   const hard = scoreGame(tough as Scenario, [...statuses]);
   const c2 = (g: typeof base) => g.items.find((x) => x.id === "c2")!;
-  assert.deepEqual([c2(base).discoverPoints, c2(base).resolvePoints], [25, 67]);
-  assert.deepEqual([c2(hard).discoverPoints, c2(hard).resolvePoints], [36, 74]); // 7×2×256% / 7×5×210%
+  assert.deepEqual([c2(base).revealDifficulty, c2(base).discoverPoints, c2(base).resolvePoints], [5, 70, 27]);
+  assert.deepEqual([c2(hard).revealDifficulty, c2(hard).discoverPoints, c2(hard).resolvePoints], [7, 88, 29]); // 7×5×250% / 7×2×210%
   assert.ok(hard.total > base.total);
 
   const e = endedWithOneFound();
   const review = e.pendingWork() as Extract<Work, { type: "review" }>;
-  assert.equal(review.ending.score.total, 18);
+  assert.equal(review.ending.score.total, 45);
   assert.match(review.note, /ending\.score はエンジンが出したスコア/);
+  assert.match(review.note, /隠れた本音をあぶり出す/);
+  // 見つけられなかった本音の、引き出しにくさと話題に触れた回数も渡る (あと何回踏み込めば届いたかを助言できる)
+  const c5 = review.concerns.find((c) => c.id === "c5")!;
+  assert.deepEqual([c5.reveal_difficulty, c5.probes, c5.probes_needed], [5, 0, 2]);
 });
 
 // ---- 難易度: ランダム ------------------------------------------------------------------------
@@ -1372,7 +1462,7 @@ test("ランダム: 始めるたびに決まり、AI に伝わる / 調整扱い
   assert.deepEqual(g.publicState().params, picked); // 終了後の答え合わせ
   // 同じシナリオでやり直しても、同じ値のまま
   assert.equal(g.replay(), null);
-  assert.equal(g.publicState().scenario!.turnLimit, 5 * 3 + 4);
+  assert.equal(g.publicState().scenario!.turnLimit, 5 * 3 + 4 + 2); // 引き出しにくい本音 (c2・c5) の分 +2
 });
 
 // ---- 公開に向けた安全対策 -----------------------------------------------------------------
@@ -1423,7 +1513,7 @@ test("まだ見つかっていない本音を台詞でほぼそのまま話し�
   const leak = line("mayor", "正直に言うと、村の蓄えが少なくて、大きな橋は作れないんじゃ。");
   const e = playing("村の予算はどのくらいですか？");
   assert.match(errorsOf(reply(e, { lines: [leak] })), /lines\[0\] に、まだ見つかっていない本音 "c1" がほぼそのまま出ています/);
-  assert.ok(reply(e, { lines: [leak], concern_updates: [{ id: "c1", to: "revealed", asked: "村の予算" }] }).ok);
+  assert.ok(reply(e, { lines: [leak], concern_updates: [{ id: "c1", to: "revealed", hint: HINT.c1, asked: "村の予算" }] }).ok);
   // 一度見つかった本音は、何度話してもよい
   e.act({ text: "やはり予算ですね" });
   assert.ok(e.reply({ turn: 2, lines: [leak] }).ok);
@@ -1450,15 +1540,15 @@ test("本音を話すのは、プレイヤーがその話題に触れたとき�
   const e = playing("こんにちは。今日はよろしくお願いします。");
   // きっかけの引用が無い / 発言に無い (話題に触れていない) なら、本音は出せない
   assert.match(errorsOf(reply(e, { concern_updates: [{ id: "c1", to: "revealed" }] })), /revealed にするには asked が必要/);
-  assert.match(errorsOf(reply(e, { concern_updates: [{ id: "c1", to: "revealed", asked: "予算はどのくらい" }] })), /asked がプレイヤーの今回の発言に見つかりません/);
-  assert.match(errorsOf(reply(e, { concern_updates: [{ id: "c1", to: "revealed", asked: "よろ" }] })), /4 文字以上/); // 短すぎる引用
+  assert.match(errorsOf(reply(e, { concern_updates: [{ id: "c1", to: "revealed", hint: HINT.c1, asked: "予算はどのくらい" }] })), /asked がプレイヤーの今回の発言に見つかりません/);
+  assert.match(errorsOf(reply(e, { concern_updates: [{ id: "c1", to: "revealed", hint: HINT.c1, asked: "よろ" }] })), /4 文字以上/); // 短すぎる引用
   assert.equal(e.publicState().concerns.length, 0);
   // 話題に触れていれば出せる (空白の違いは無視)
   const e2 = playing("村の予算は、どのくらいですか？");
-  assert.ok(reply(e2, { concern_updates: [{ id: "c1", to: "revealed", asked: "村の予算は、どの くらい" }] }).ok);
+  assert.ok(reply(e2, { concern_updates: [{ id: "c1", to: "revealed", hint: HINT.c1, asked: "村の予算は、どの くらい" }] }).ok);
   // 差し戻し (proposed → revealed) や、提案が当たったとき (hidden → proposed は quote で確かめる) には要らない
   const e3 = playing(BIG);
-  assert.ok(reply(e3, { concern_updates: [{ id: "c1", to: "proposed", note: "小さな木橋", quote: Q1 }] }).ok);
+  assert.ok(reply(e3, { concern_updates: [{ id: "c1", to: "proposed", hint: HINT.c1, note: "小さな木橋", quote: Q1 }] }).ok);
 });
 
 test("しゃべりすぎの返答は差し戻す (台詞の長さ・数、しゃべる人数、地の文)", () => {

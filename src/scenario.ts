@@ -64,13 +64,21 @@ export const concernSchema = z.object({
     .describe(
       "owner にとっての重要度 (1〜10。difficulty.importance_levels を参照)。9〜10 (これだけは譲れない) をちょうど difficulty.non_negotiable 個にし、残りは 1〜8 で緩急をつける (「必ず達成したい」から「譲ってもよい」まで)。本音が見つかるとプレイヤーにも見える",
     ),
-  reveal_hint: z.string().min(6).max(200).describe("【AI専用】どんな聞き方・話題で本音が出るか"),
+  reveal_hint: z
+    .string()
+    .min(6)
+    .max(200)
+    .describe(
+      "【AI専用】どんな聞き方・話題で本音が出るか。具体的な話題 (例: 「渡し守の暮らしや収入に触れる」) にする。本音を話すときは、プレイヤーの発言がこのどの部分に触れたかを引用して示す (エンジンが照合する) ので、「事情を尋ねる」のような、どんな質問にも当てはまる書き方にしない",
+    ),
   min_trust: z
     .number()
     .int()
     .min(MIN_LEVEL)
     .max(MAX_LEVEL - 1)
-    .describe("この本音を話し始める、owner の信頼度 (1〜9)。difficulty.open_at_start 個だけを owner の trust_start 以下 (最初から話せる) にし、残りは owner の trust_start より上でばらつかせる"),
+    .describe(
+      "この本音を話し始める、owner の信頼度 (1〜9)。difficulty.open_at_start 個だけを owner の trust_start 以下 (最初から話せる) にし、残りは owner の trust_start より上でばらつかせる。trust_start との差が大きいほど (owner が頑なほど) 引き出しにくい本音になり、プレイヤーが話題に何度か触れないと話せなくなる (引き出しにくさはエンジンが計算する)",
+    ),
   resolved_when: z
     .string()
     .min(10)
@@ -327,7 +335,14 @@ export const replyShape = {
           .max(200)
           .optional()
           .describe(
-            "未発見 (hidden) から to=revealed にするとき必須。プレイヤーの今回の発言から、この本音を話すきっかけになった部分 (その話題に触れた質問など) を一字一句そのまま抜き出す。プレイヤーが触れていない本音は話さない",
+            "未発見 (hidden) から to=revealed にするとき必須。プレイヤーの今回の発言から、この本音を話すきっかけになった部分 (その話題に触れた質問など) を一字一句そのまま抜き出す。プレイヤーが触れていない本音は話さない。同じ返答で複数の本音に触れるなら、それぞれ発言の別の部分を引用する",
+          ),
+        hint: z
+          .string()
+          .max(200)
+          .optional()
+          .describe(
+            "未発見 (hidden) から進めるとき必須。この本音の reveal_hint のうち、プレイヤーの今回の発言 (asked。未発見から to=proposed なら quote) が触れた話題を、reveal_hint から一字一句そのまま抜き出す (「尋ねる」「話題」のような言葉だけでなく、話題そのものを含める)。抜き出せないなら、発言はこの本音の話題に触れていないので、本音は話さない",
           ),
         quote: z
           .string()
@@ -367,6 +382,19 @@ export const replyShape = {
     .optional()
     .describe(
       "懸念の進行。1つの懸念は1ターンに1段階だけ動かせる。例外: 本音が見えている懸念 (revealed) は、プレイヤーの今回の案だけで解消条件を満たし、owner がその場で受け入れるなら、検討中を挟まず resolved にできる (quote 必須)。譲れない本音 (importance 9〜10) と歩み寄りは即決できない。resolved にするときは、いつも checks (解消条件との照らし合わせ) が必須",
+    ),
+  probes: z
+    .array(
+      z.object({
+        id: z.string(),
+        asked: z.string().max(200).describe("プレイヤーの今回の発言から、この本音の話題に触れた部分を一字一句そのまま抜き出す (4 文字以上)"),
+        hint: z.string().max(200).describe("この本音の reveal_hint のうち、asked が触れた話題を、reveal_hint から一字一句そのまま抜き出す"),
+      }),
+    )
+    .max(MAX_CONCERNS)
+    .optional()
+    .describe(
+      "話題に触れられたが、まだ本音を話さない未発見の本音 (hidden)。owner の信頼度が min_trust に届かない、または digest の probes + 1 が probes_needed (引き出しにくい本音ほど多い) に届かないとき。エンジンが話題に触れられた回数として数え、届いたターンで本音を話せる。記録しないと回数が増えず、いつまでも話せない。本音は話さず、表向きの事情だけを答える (触れられた回数が増えるほど、少しずつ具体的にしてよい)。concern_updates で進める本音は入れない",
     ),
   moods: z
     .array(z.object({ character: z.string(), emoji: z.string().min(1).max(8), label: z.string().min(1).max(12) }))
