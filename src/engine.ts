@@ -21,13 +21,30 @@ import {
   turnLimitOf,
 } from "./shared.js";
 import { scoreGame } from "./score.js";
-import { checkScenario, findSteering, findUnsafeOutput, leaksSecret, reviewSchema, scenarioSchema, steeringMessage, unsafeMessage, type ReplyInput, type Scenario } from "./scenario.js";
+import {
+  checkScenario,
+  findSteering,
+  findUnsafeOutput,
+  findVerdict,
+  leaksSecret,
+  reviewSchema,
+  scenarioSchema,
+  steeringMessage,
+  unsafeMessage,
+  verdictMessage,
+  type ReplyInput,
+  type Scenario,
+} from "./scenario.js";
 import { pickTheme, type Theme } from "./themes.js";
 
 const MAX_LOG = 400;
 const NEUTRAL_MOOD: Mood = { emoji: "😐", label: "ふつう" };
 /** 引用の照合は空白 (全角含む) を無視する */
 const squash = (t: string) => t.replace(/\s+/g, "");
+/** 解消条件との照らし合わせに使わない記号を除く */
+const plain = (t: string) => squash(t).replace(/[、。，．,.・「」『』（）()!?！？…]/g, "");
+/** 解消のときの照らし合わせ (checks) は、解消条件のこれだけを覆っていればよい (語尾の「〜が示される」などは除いてよい) */
+const MIN_CHECK_COVERAGE = 0.6;
 const MIN_QUOTE = 4;
 
 // 相手からの歩み寄り (initiative): 条件がそろったとき、キャラクターの側から「私はこうしたい」と着地点を示す。
@@ -52,7 +69,7 @@ const MAX_REVEALS_PER_REPLY = 1;
  * 台詞に、ツール引数の JSON の切れ端が混ざっていないか。軽いモデルが引数の組み立てに失敗すると、
  * 「…なんです。」}],moods:[{character: のように、後ろの項目が台詞に流れ込むことがある
  */
-const ARGUMENT_DEBRIS = /[{}[\]]\s*,?\s*"?[A-Za-z_]+"?\s*:|"?\b(?:speaker|text|moods|character|emoji|label|concern_updates|trust_changes|delta|reason|epilogue|note|asked|quote|evidence|initiative)\b"?\s*:/;
+const ARGUMENT_DEBRIS = /[{}[\]]\s*,?\s*"?[A-Za-z_]+"?\s*:|"?\b(?:speaker|text|moods|character|emoji|label|concern_updates|trust_changes|delta|reason|epilogue|note|asked|quote|evidence|initiative|checks|point)\b"?\s*:/;
 /** 台詞全体を囲むかぎ括弧は外す (吹き出しで話者が分かるので不要) */
 const unwrapQuotes = (t: string) => (/^「[^「」]*」$/.test(t) ? t.slice(1, -1) : t);
 
@@ -193,7 +210,8 @@ const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n
  */
 const TURN_CHECKLIST = [
   "本音 (未発見の懸念) を話すのは、今回のプレイヤーの発言がその話題 (reveal_hint) に触れたときだけ。別の話題への返事や一般的な質問で、自分から打ち明けない (「実は」「本音を言うと」と切り出さない)。",
-  "解消 (resolved) にするのは、プレイヤーの発言が resolved_when のすべての点を満たすときだけ。足りない点があれば、キャラクターの言葉でそう伝える。プレイヤーが言っていない解決策や約束を、キャラクターが自分で足さない。",
+  "解消 (resolved) にするのは、resolved_when のすべての点について、それを満たしたプレイヤーの発言を checks で示せるときだけ。足りない点があれば、キャラクターの言葉でそう伝える。プレイヤーが言っていない解決策や約束を、キャラクターが自分で足さない。",
+  "地の文と epilogue では、結末を言い切らない (「すべての懸念が解消された」「完全な合意が成立した」など)。会話で実際に決まったことだけを書く。",
 ];
 
 const levelOf = (pts: number) => Math.floor(pts / 100);
@@ -500,6 +518,14 @@ export class Engine {
           continue;
         }
       }
+      // 解消には、解消条件のどの点をプレイヤーのどの発言が満たしたかの照らし合わせが要る (不十分な案での解消・自分で足した解決策を防ぐ)
+      if (u.to === "resolved") {
+        const why = this.checksError(u.id, c.resolved_when, u.checks ?? []);
+        if (why) {
+          errors.push(why);
+          continue;
+        }
+      }
       if ((u.to === "proposed" || u.to === "resolved" || (from === "proposed" && u.to === "revealed")) && note.length < 4) {
         errors.push(`懸念 "${u.id}" → ${u.to} には note (対処案の要約 / 合意内容 / 足りない点) が必要です`);
         continue;
@@ -537,6 +563,13 @@ export class Engine {
     if (ARGUMENT_DEBRIS.test(epilogue)) errors.push("epilogue に、ツール引数の JSON の切れ端が混ざっています。締めくくりの一文だけにしてください");
     const epilogueUnsafe = findUnsafeOutput(epilogue);
     if (epilogueUnsafe) errors.push(unsafeMessage("epilogue", epilogueUnsafe));
+    // 結末はエンジンが判定する。地の文と締めくくりの一文で言い切らせない
+    const epilogueVerdict = findVerdict(epilogue);
+    if (epilogueVerdict) errors.push(verdictMessage("epilogue", epilogueVerdict));
+    r.lines.forEach((l, i) => {
+      const hit = l.speaker === "narrator" ? findVerdict(l.text) : null;
+      if (hit) errors.push(verdictMessage(`lines[${i}] (地の文)`, hit));
+    });
 
     if (errors.length) return fail(...errors);
 
@@ -622,6 +655,37 @@ export class Engine {
     }
     if (turns.size < minTurns) {
       return `${head}: 根拠の発言が ${turns.size} つのターンにしかありません。本音が見えた後、プレイヤーが ${minTurns} ターン以上その話題に向き合ってから歩み寄ってください`;
+    }
+    return null;
+  }
+
+  /**
+   * 解消 (resolved) の照らし合わせ。解消条件のどの点を、プレイヤーのどの発言が満たしたかを並べさせる
+   * (自動の試遊で、不十分な案で解消にする・プレイヤーが言っていない解決策を相手が足す、が軽いモデルに多かった)。
+   * 確かめられるのは、点が解消条件からの抜き出しであること・条件のほぼ全体を覆っていること・引用がプレイヤーの発言に実在することまで。
+   * その発言が本当に条件を満たすかは AI の判断
+   */
+  private checksError(id: string, resolvedWhen: string, checks: Array<{ point: string; quote: string }>): string | null {
+    const head = `懸念 "${id}" を resolved にする照らし合わせ (checks)`;
+    const how =
+      "解消条件 (resolved_when) の点ごとに、{ point: 解消条件からそのまま抜き出した部分, quote: それを満たしたプレイヤーの発言からそのまま抜き出した部分 } を並べてください。満たしていない点があるなら resolved にせず、足りない点をキャラクターの言葉で伝えてください";
+    if (!checks.length) return `${head}が必要です。${how}`;
+    const condition = plain(resolvedWhen);
+    const covered: boolean[] = new Array(condition.length).fill(false);
+    for (const ch of checks) {
+      const point = plain(ch.point);
+      const at = point.length >= 2 ? condition.indexOf(point) : -1;
+      if (at < 0) return `${head}: point「${ch.point.slice(0, 30)}」が解消条件「${resolvedWhen}」の中に見つかりません。言い換えず、解消条件からそのまま抜き出してください`;
+      covered.fill(true, at, at + point.length);
+      const quote = squash(ch.quote);
+      if (quote.length < MIN_QUOTE) return `${head}: point「${ch.point.slice(0, 30)}」の quote が短すぎます。プレイヤーの発言から ${MIN_QUOTE} 文字以上、一字一句そのまま引用してください`;
+      if (!this.playerTexts.some((p) => squash(p.text).includes(quote))) {
+        return `${head}: quote「${ch.quote.slice(0, 30)}」がプレイヤーの発言に見つかりません。言い換えず、発言をそのまま引用してください。プレイヤーが言っていないことでは解消できません`;
+      }
+    }
+    if (covered.filter(Boolean).length < condition.length * MIN_CHECK_COVERAGE) {
+      const missing = [...condition].filter((_, i) => !covered[i]).join("");
+      return `${head}: 解消条件の一部の点にしか、プレイヤーの発言が挙がっていません (挙がっていない部分:「${missing.slice(0, 40)}」)。${how}`;
     }
     return null;
   }
