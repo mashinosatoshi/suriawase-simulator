@@ -79,6 +79,13 @@ const scenario = {
     { id: "c4", owner: "owner", category: "体力", text: "腰を痛めて重い本の箱を運ぶのがつらい", importance: 4, reveal_hint: "体調や毎日の作業を気遣う", min_trust: 7, resolved_when: "力仕事を減らす手立てが示される" },
     { id: "c5", owner: "owner", category: "取引", text: "取次への支払いが残っていて簡単には畳めない", importance: 3, reveal_hint: "閉めるときの段取りを尋ねる", min_trust: 8, resolved_when: "支払いを片づける道筋が示される" },
   ],
+  root_issue: {
+    owner: "owner",
+    text: "店をやめると、人と関わる場も自分の役目も一度に失い、独りになってしまうのが怖い",
+    linked: ["c2", "c3"],
+    awareness: "unspoken",
+    reach_when: "店主自身の居場所と人とのつながりが店と一体になっていることと、店をやめると独りになる不安を言い当てる",
+  },
   briefing: [
     { label: "店", text: "駅前で 40 年続く小さな書店。店主が一人で切り盛りしている" },
     { label: "状況", text: "この 3 年、売上が毎年 1 割ずつ落ちている" },

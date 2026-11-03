@@ -57,6 +57,20 @@ export interface PublicConcern {
   missed?: boolean;
 }
 
+/**
+ * 本質的な課題: 本人も言葉にできていない、いくつもの本音の根っこ。質問しても出てこず、プレイヤーが仮説として言い当てたときだけ開く。
+ * ゲーム中、まだ届いていなければ中身は送らない (ボードには枠だけを出す)
+ */
+export interface PublicRoot {
+  status: "hidden" | "reached";
+  owner?: string;
+  text?: string;
+  /** 終了後だけ: この課題につながっていた本音 (答え合わせ) */
+  linked?: string[];
+  /** 終了後、たどり着けなかった */
+  missed?: boolean;
+}
+
 export interface LogLine {
   id: number;
   // 進行の要約 (本音が見えた・信頼度が上がった等) はログに出さない。会話と地の文だけ
@@ -107,15 +121,17 @@ export interface ScoreItem {
   maxPoints: number;
 }
 
-/** どれだけ重要で引き出しにくい本音を引き出し、解決に導いたか (引き出すほうを重く見る) */
+/** どれだけ重要で引き出しにくい本音を引き出し、解決に導いたか (引き出すほうを重く見る)。本質的な課題に届いたか */
 export interface GameScore {
   total: number;
-  /** このシナリオの満点 (すべて引き出して解決したとき) */
+  /** このシナリオの満点 (すべて引き出して解決し、本質的な課題にも届いたとき) */
   max: number;
   /** 満点に対する割合 (%、切り捨て) */
   percent: number;
   rank: ScoreRank;
   items: ScoreItem[];
+  /** 本質的な課題の点 (満点の 4 分の 1。届かなければ 0。表の本音をすべて解決しても、届かなければ A まで) */
+  root: { reached: boolean; points: number; maxPoints: number };
 }
 
 // ---- 難易度 ----------------------------------------------------------------------
@@ -159,12 +175,14 @@ export interface DifficultyParams {
   initiativeTrust: number;
   /** 相手からの歩み寄り: このターン数に 1 回まで */
   initiativeCooldown: number;
+  /** 本質的な課題 (いくつもの本音の根っこ) に届くのに、先に見つけておく、つながる本音の数 */
+  rootClues: number;
 }
 
 export const DIFFICULTY_PRESETS: Record<PresetDifficulty, DifficultyParams> = {
-  easy: { concerns: 4, openAtStart: 2, nonNegotiable: 1, trustStart: 7, openness: 8, turnsPerConcern: 4, understanding: 8, initiativeTurns: 1, initiativeTrust: 5, initiativeCooldown: 1 },
-  normal: { concerns: 5, openAtStart: 2, nonNegotiable: 1, trustStart: 5, openness: 5, turnsPerConcern: 3, understanding: 5, initiativeTurns: 2, initiativeTrust: 7, initiativeCooldown: 2 },
-  hard: { concerns: 7, openAtStart: 1, nonNegotiable: 2, trustStart: 2, openness: 3, turnsPerConcern: 2, understanding: 2, initiativeTurns: 3, initiativeTrust: 8, initiativeCooldown: 3 },
+  easy: { concerns: 4, openAtStart: 2, nonNegotiable: 1, trustStart: 7, openness: 8, turnsPerConcern: 4, understanding: 8, initiativeTurns: 1, initiativeTrust: 5, initiativeCooldown: 1, rootClues: 2 },
+  normal: { concerns: 5, openAtStart: 2, nonNegotiable: 1, trustStart: 5, openness: 5, turnsPerConcern: 3, understanding: 5, initiativeTurns: 2, initiativeTrust: 7, initiativeCooldown: 2, rootClues: 2 },
+  hard: { concerns: 7, openAtStart: 1, nonNegotiable: 2, trustStart: 2, openness: 3, turnsPerConcern: 2, understanding: 2, initiativeTurns: 3, initiativeTrust: 8, initiativeCooldown: 3, rootClues: 3 },
 };
 
 export const TURN_BASE = 4;
@@ -182,6 +200,12 @@ export const PARAM_SPECS: Record<keyof DifficultyParams, { label: string; min: n
   initiativeTurns: { label: "歩み寄りに要るターン数", min: 1, max: 4, help: "本音が見えた後、何ターンその話に向き合えば、相手から歩み寄ってくれるか" },
   initiativeTrust: { label: "歩み寄りに要る信頼度", min: MIN_LEVEL, max: MAX_LEVEL, help: "相手から歩み寄るのに要る、その人の信頼度 (1〜10。その本音を話し始める信頼度 + 1 のほうが高ければそちら)" },
   initiativeCooldown: { label: "歩み寄りの間隔", min: 1, max: 4, help: "相手からの歩み寄りは、このターン数に 1 回まで" },
+  rootClues: {
+    label: "本質への手がかりの数",
+    min: 2,
+    max: 4,
+    help: "本質的な課題 (本人も言葉にできていない、いくつもの本音の根っこ) を言い当てるのに、先に見つけておく、つながる本音の数。多いほど、点と点をつなぐまでが長い",
+  },
 };
 
 export const sameParams = (a: DifficultyParams, b: DifficultyParams) => (Object.keys(a) as Array<keyof DifficultyParams>).every((k) => a[k] === b[k]);
@@ -270,6 +294,8 @@ export interface PublicState {
   turn: number;
   // 信頼度は隠し状態。現実の対話と同じく数値では見せず、キャラクターの気分 (mood) や口調でだけ伝わる
   concerns: PublicConcern[];
+  /** シナリオが無いときは null */
+  root: PublicRoot | null;
   log: LogLine[];
   ending: Ending | null;
   /** 終了後、AI が書き終えるまでは null */

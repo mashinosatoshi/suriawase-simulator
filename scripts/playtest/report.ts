@@ -1,11 +1,11 @@
 // 自動試遊の結果を書き出す。ゲームごとの記録 (game-NN.json / game-NN.md) と、全体のまとめ (report.md)
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { Ending, PublicReview } from "../../src/shared.js";
+import type { Ending, PublicReview, PublicRoot } from "../../src/shared.js";
 import type { Scenario } from "../../src/scenario.js";
 import type { Theme } from "../../src/themes.js";
 import { rpmOf, tpmOf, type Options, type RoleSpec } from "./config.js";
-import { CATEGORIES, SEVERITIES, type JudgeReport, type TranscriptLine } from "./judge.js";
+import { CATEGORIES, REACH_VERDICTS, SEVERITIES, type JudgeReport, type TranscriptLine } from "./judge.js";
 import type { Usage } from "./providers.js";
 
 export interface Rejection {
@@ -26,6 +26,8 @@ export interface GameRecord {
   transcript: TranscriptLine[];
   ending: Ending | null;
   review: PublicReview | null;
+  /** 本質的な課題 (終了後の公開状態。中身と、届いたか) */
+  root: PublicRoot | null;
   /** エンジンが差し戻した AI の返答 (GM のログから) */
   rejections: Rejection[];
   /** 途中で止まった理由 (止まらなければ null) */
@@ -45,6 +47,9 @@ export function quoteFound(g: GameRecord, issue: JudgeReport["issues"][number]) 
   return g.transcript.some((l) => l.from !== "player" && l.turn === issue.turn && squash(l.text).includes(q));
 }
 
+/** 本質的な課題の中身と、届いたか */
+const rootText = (g: GameRecord) => (g.root?.text ? `${g.root.status === "reached" ? "届いた" : "届かなかった"} — ${g.root.text}` : "(記録なし)");
+
 function gameMarkdown(g: GameRecord) {
   const issues = g.judge?.issues ?? [];
   const lines = g.transcript.map((l) => {
@@ -61,7 +66,9 @@ function gameMarkdown(g: GameRecord) {
     `- 難易度: ${g.difficulty}`,
     `- 結末: ${g.ending ? `${g.ending.type} (${g.ending.reason}) 解消 ${g.ending.resolved}/${g.ending.total}・スコア ${g.ending.score.total}/${g.ending.score.max} (${g.ending.score.rank})` : "(終わらなかった)"}`,
     ...(g.error ? [`- **止まった理由**: ${g.error}`] : []),
+    `- 本質的な課題: ${rootText(g)}`,
     g.judge ? `- 審査: 自然さ ${g.judge.naturalness}/5。${g.judge.summary}` : `- 審査: ${g.judgeError ?? "(なし)"}`,
+    ...(g.judge?.root_issue ? [`- 本質の審査: 深さ ${g.judge.root_issue.depth}/5・${g.judge.root_issue.reach}。${g.judge.root_issue.comment}`] : []),
     "",
     "## 会話",
     "",
@@ -103,6 +110,8 @@ export function writeResults(dir: string, header: string[], games: GameRecord[],
   }
 
   const judged = games.filter((g) => g.judge);
+  // 本質的な課題の評価が入った審査 (この評価を足す前の記録には無い)
+  const rootJudged = judged.filter((g) => g.judge!.root_issue);
   const issues = judged.flatMap((g) => g.judge!.issues.map((i) => ({ g, i, found: quoteFound(g, i) })));
   const avg = judged.length ? (judged.reduce((n, g) => n + g.judge!.naturalness, 0) / judged.length).toFixed(1) : "-";
   const turns = games.map((g) => g.transcript.filter((l) => l.from === "player").length);
@@ -129,6 +138,19 @@ export function writeResults(dir: string, header: string[], games: GameRecord[],
     `- 審査の自然さ (5 段階): 平均 ${avg} (審査できたゲーム ${judged.length})`,
     `- 不自然さの指摘: ${issues.length} 件 (台詞に引用が見つからない指摘 ${issues.filter((x) => !x.found).length} 件)`,
     `- エンジンの差し戻し: ${rejections.length} 回`,
+    `- 本質的な課題: 届いたゲーム ${games.filter((g) => g.root?.status === "reached").length} / ${games.filter((g) => g.ending).length}・審査の深さ (5 段階) 平均 ${rootJudged.length ? (rootJudged.reduce((n, g) => n + g.judge!.root_issue.depth, 0) / rootJudged.length).toFixed(1) : "-"}`,
+    "",
+    "## 本質的な課題",
+    "",
+    "表の本音の奥にある、本人も言葉にできていない根っこ。審査役が、作り込み (深さ) と到達の判定の妥当さを見た。",
+    "",
+    `| 判定 | ${REACH_VERDICTS.join(" | ")} |`,
+    `|---|${REACH_VERDICTS.map(() => "---").join("|")}|`,
+    `| ゲーム数 | ${REACH_VERDICTS.map((v) => rootJudged.filter((g) => g.judge!.root_issue.reach === v).length).join(" | ")} |`,
+    "",
+    "| ゲーム | 本質的な課題 | 深さ | 到達の判定 | 所見 |",
+    "|---|---|---|---|---|",
+    ...games.map((g) => `| [${pad(g.index)}](game-${pad(g.index)}.md) | ${cell(rootText(g))} | ${g.judge?.root_issue?.depth ?? "-"} | ${g.judge?.root_issue?.reach ?? "-"} | ${cell(g.judge?.root_issue?.comment ?? "")} |`),
     "",
     "## 使用量",
     "",

@@ -39,8 +39,13 @@ export function randomParams(rand: () => number = Math.random): DifficultyParams
     initiativeTurns: any("initiativeTurns"),
     initiativeTrust: any("initiativeTrust"),
     initiativeCooldown: any("initiativeCooldown"),
+    rootClues: upToConcerns("rootClues"),
   };
 }
+
+/** 本質的な課題への気づき。簡単は「薄々わかっている」(言い当てれば素直に認める)、難しいは「本人も気づいていない」。ほかは人柄で決める */
+export type RootAwareness = "unaware" | "unspoken";
+const ROOT_AWARENESS: Record<Difficulty, RootAwareness | "any"> = { easy: "unspoken", normal: "any", hard: "unaware", random: "any" };
 
 /** その難易度で、パラメータを指定せずに始めたときの値 (ランダムなら、ここで決める) */
 export const defaultParams = (level: Difficulty): DifficultyParams => (level === "random" ? randomParams() : { ...DIFFICULTY_PRESETS[level] });
@@ -142,6 +147,10 @@ export function difficultyBrief(level: Difficulty, p: DifficultyParams) {
     /** 登場人物の物わかりの平均 (1〜10) */
     understanding: p.understanding,
     turns: turnLimitOf(p),
+    /** 本質的な課題につながる本音 (root_issue.linked) の最低の数。プレイヤーはこの数だけ見つけてから、本質を言い当てられる */
+    root_clues: p.rootClues,
+    /** 本質的な課題への owner の気づき (root_issue.awareness)。any なら persona に合わせて選ぶ */
+    root_awareness: ROOT_AWARENESS[level],
     note: `trust_start・openness・understanding は登場人物全員の平均。各キャラの characters[].trust_start / openness / understanding を persona (人柄) に合わせて決め、平均をこの値 ±${AVERAGE_TOLERANCE} に収める (2 人以上なら、人ごとに差をつける)。opening の口調と opening_moods は、各キャラの trust_start の段階 (trust_levels) に合わせる。仕草や内心の描写ではなく、台詞と気分で表す。`,
     trust_levels: levels(TRUST_LEVEL_NAMES, TRUST_TEXT),
     openness_levels: levels(OPENNESS_LEVEL_NAMES, OPENNESS_TEXT),
@@ -167,5 +176,6 @@ export function parseDifficulty(level: unknown, params: unknown): { level: Diffi
   }
   if (out.openAtStart > out.concerns) return { error: "「最初から話せる本音の数」は「懸念の数」以下にしてください" };
   if (out.nonNegotiable > out.concerns) return { error: "「譲れない本音の数」は「懸念の数」以下にしてください" };
+  if (out.rootClues > out.concerns) return { error: "「本質への手がかりの数」は「懸念の数」以下にしてください" };
   return { level: d, params: out };
 }

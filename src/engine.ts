@@ -15,6 +15,7 @@ import {
   type Phase,
   type PublicConcern,
   type PublicReview,
+  type PublicRoot,
   type PublicState,
   findSecretLike,
   secretInTextMessage,
@@ -69,6 +70,8 @@ const MAX_NARRATOR_CHARS = 80;
 /** 本音のきっかけ (hint) から除くと、話題そのものが残るか (「尋ねる」「話題」だけでは、どの本音の話題かが分からない) */
 const GENERIC_HINT = /尋ね|たずね|聞[かきくけこい]|訊|触れ|ふれ|話題|話|こと|事情|について|に関して|質問|する|られ|[をにのやとへがはもで]/g;
 const MIN_HINT = 2;
+/** 本質的な課題を言い当てた発言の引用 (仮説として言葉にした部分) の最短の長さ */
+const MIN_ROOT_QUOTE = 8;
 
 /** 本音のきっかけの照らし合わせ (hint) が、reveal_hint の話題を抜き出しているか。だめなら理由を返す (reveal_hint の中身は書かない。エラーはプレイヤーの画面に出ることがある) */
 function hintError(head: string, revealHint: string, hint: string | undefined): string | null {
@@ -83,7 +86,7 @@ function hintError(head: string, revealHint: string, hint: string | undefined): 
  * 台詞に、ツール引数の JSON の切れ端が混ざっていないか。軽いモデルが引数の組み立てに失敗すると、
  * 「…なんです。」}],moods:[{character: のように、後ろの項目が台詞に流れ込むことがある
  */
-const ARGUMENT_DEBRIS = /[{}[\]]\s*,?\s*"?[A-Za-z_]+"?\s*:|"?\b(?:speaker|text|moods|character|emoji|label|concern_updates|trust_changes|delta|reason|epilogue|note|asked|hint|quote|evidence|initiative|checks|point|probes)\b"?\s*:/;
+const ARGUMENT_DEBRIS = /[{}[\]]\s*,?\s*"?[A-Za-z_]+"?\s*:|"?\b(?:speaker|text|moods|character|emoji|label|concern_updates|trust_changes|delta|reason|epilogue|note|asked|hint|quote|evidence|initiative|checks|point|probes|root_reach)\b"?\s*:/;
 /** 台詞全体を囲むかぎ括弧は外す (吹き出しで話者が分かるので不要) */
 const unwrapQuotes = (t: string) => (/^「[^「」]*」$/.test(t) ? t.slice(1, -1) : t);
 
@@ -179,6 +182,8 @@ export type Work =
         proposed_by?: "player" | "character";
         agreement?: string;
       }>;
+      /** 本質的な課題と、届いたか (届いていなければ、どの本音をつなげば届いたかを振り返りに書く) */
+      root_issue: { owner: string; text: string; awareness: "unaware" | "unspoken"; reach_when: string; linked: string[]; clues_found: number; clues_needed: number; reached: boolean; note?: string };
       /** 登場人物ごとの信頼度 (最初と最後) と物わかり */
       characters: Array<{ id: string; name: string; trust_start: number; trust_end: number; openness: number; understanding: number }>;
       trust_history: TrustChange[];
@@ -222,6 +227,22 @@ export interface Digest {
     /** 歩み寄るのに要る、owner の信頼度 */
     initiative_trust: number;
   }>;
+  /**
+   * 本質的な課題 (いくつもの本音の根っこ。owner 本人も言葉にできていない)。キャラクターからは言わず、匂わせない。
+   * プレイヤーが言い当て、clues_found が clues_needed 以上で、reach_when のすべての点を言い当てたときだけ root_reach を付ける
+   */
+  root: {
+    owner: string;
+    text: string;
+    awareness: "unaware" | "unspoken";
+    reach_when: string;
+    linked: string[];
+    /** つながる本音のうち、見つかっている数 (この返答より前) */
+    clues_found: number;
+    /** 言い当てに要る、見つかっている、つながる本音の数 */
+    clues_needed: number;
+    reached: boolean;
+  };
 }
 
 export type Result<T extends object = object> = ({ ok: true } & T) | { ok: false; errors: string[] };
@@ -241,6 +262,7 @@ const TURN_CHECKLIST = [
   "本音 (未発見の懸念) を話すのは、次のすべてを満たすときだけ: 今回のプレイヤーの発言が、その本音の reveal_hint の話題に具体的に触れている (触れた話題を hint で reveal_hint から抜き出せる) / owner の信頼度が min_trust 以上 / probes + 1 が probes_needed 以上。話題に触れたが信頼度か回数が足りなければ、probes に記録して表向きの事情だけを答える。別の話題への返事や一般的な質問で、自分から打ち明けない (「実は」「本音を言うと」と切り出さない)。",
   "解消 (resolved) にするのは、resolved_when のすべての点について、それを満たしたプレイヤーの発言を checks で示せるときだけ。足りない点があれば、キャラクターの言葉でそう伝える。プレイヤーが言っていない解決策や約束を、キャラクターが自分で足さない。",
   "地の文と epilogue では、結末を言い切らない (「すべての懸念が解消された」「完全な合意が成立した」など)。会話で実際に決まったことだけを書く。",
+  "本質的な課題 (digest.root) は、キャラクターから言わず、匂わせない。root_reach を付けるのは、今回のプレイヤーの発言が仮説として言い当て、clues_found が clues_needed 以上で、reach_when のすべての点を checks で示せるときだけ。一般論や要素の欠けた仮説では付けない。",
 ];
 
 const levelOf = (pts: number) => Math.floor(pts / 100);
@@ -266,6 +288,8 @@ export class Engine {
   private trustHistory: TrustChange[] = [];
   private concerns: ConcernRuntime[] = [];
   private concernSeq = 0;
+  /** 本質的な課題に届いたか (届いたターンと、何を言い当てたかの記録) */
+  private root: { reached: boolean; turn?: number; note?: string } = { reached: false };
   /** プレイヤーの発言とそのターン (歩み寄りの根拠の照合用。ブラウザには送らない) */
   private playerTexts: Array<{ turn: number; text: string }> = [];
   private lastInitiativeTurn: number | null = null;
@@ -335,6 +359,7 @@ export class Engine {
     this.trustHistory = [];
     this.concerns = [];
     this.concernSeq = 0;
+    this.root = { reached: false };
     this.playerTexts = [];
     this.lastInitiativeTurn = null;
     this.moods.clear();
@@ -632,6 +657,22 @@ export class Engine {
       }
     });
 
+    // 本質的な課題: プレイヤーが手がかり (つながる本音) をそろえたうえで、仮説として言い当てたときだけ届く。キャラクターからは言わない
+    const reachesRoot = !!r.root_reach;
+    if (r.root_reach) {
+      const why = this.rootReachError(r.root_reach, action.text);
+      if (why) errors.push(why);
+      // 届いたターンは、本質を抱えていた人が、つながりを自分の言葉で語り直す
+      else if (!r.lines.some((l) => l.speaker === s.root_issue.owner)) errors.push(`本質的な課題に届いたターンは、owner (${s.root_issue.owner}) が台詞で応じてください (言い当てられて気づいたこと・認めたことを、その人の言葉で)`);
+    }
+    if (!this.root.reached && !reachesRoot) {
+      r.lines.forEach((l, li) => {
+        if (leaksSecret(l.text, s.root_issue.text)) {
+          errors.push(`lines[${li}] に、まだ届いていない本質的な課題がほぼそのまま出ています。本質的な課題はキャラクターから言いません。プレイヤーが言い当てたときだけ root_reach で届いたことにしてください`);
+        }
+      });
+    }
+
     // この返答で対話が終わるか
     const after = this.concerns.map((c) => c.status);
     for (const p of planned) after[p.index] = p.to;
@@ -682,6 +723,7 @@ export class Engine {
     }
 
     for (const i of probed) this.concerns[i].probes++;
+    if (r.root_reach) this.root = { reached: true, turn: this.turn, note: r.root_reach.note.trim() };
     // 進行の要約はチャットには出さない (現実の対話では見えないため)。懸念ボードの状態だけが変わる
     for (const p of planned) {
       const rt = this.concerns[p.index];
@@ -758,27 +800,62 @@ export class Engine {
    * その発言が本当に条件を満たすかは AI の判断
    */
   private checksError(id: string, resolvedWhen: string, checks: Array<{ point: string; quote: string }>): string | null {
-    const head = `懸念 "${id}" を resolved にする照らし合わせ (checks)`;
     const how =
       "解消条件 (resolved_when) の点ごとに、{ point: 解消条件からそのまま抜き出した部分, quote: それを満たしたプレイヤーの発言からそのまま抜き出した部分 } を並べてください。満たしていない点があるなら resolved にせず、足りない点をキャラクターの言葉で伝えてください";
+    return this.coverageError(`懸念 "${id}" を resolved にする照らし合わせ (checks)`, "解消条件", resolvedWhen, checks, how, true);
+  }
+
+  /**
+   * 照らし合わせ (checks) が、条件 (懸念の解消条件・本質的な課題への到達の条件) のほぼ全体を、実在するプレイヤーの発言で覆っているか。
+   * だめなら理由を返す。show = false なら、条件の中身をエラーに書かない (本質的な課題の答えになるため。エラーはプレイヤーの画面に出ることがある)
+   */
+  private coverageError(head: string, name: string, conditionText: string, checks: Array<{ point: string; quote: string }>, how: string, show: boolean): string | null {
     if (!checks.length) return `${head}が必要です。${how}`;
-    const condition = plain(resolvedWhen);
+    const condition = plain(conditionText);
     const covered: boolean[] = new Array(condition.length).fill(false);
     for (const ch of checks) {
       const point = plain(ch.point);
       const at = point.length >= 2 ? condition.indexOf(point) : -1;
-      if (at < 0) return `${head}: point「${ch.point.slice(0, 30)}」が解消条件「${resolvedWhen}」の中に見つかりません。言い換えず、解消条件からそのまま抜き出してください`;
+      if (at < 0) return `${head}: point「${ch.point.slice(0, 30)}」が${name}${show ? `「${conditionText}」` : ""}の中に見つかりません。言い換えず、${name}からそのまま抜き出してください`;
       covered.fill(true, at, at + point.length);
       const quote = squash(ch.quote);
       if (quote.length < MIN_QUOTE) return `${head}: point「${ch.point.slice(0, 30)}」の quote が短すぎます。プレイヤーの発言から ${MIN_QUOTE} 文字以上、一字一句そのまま引用してください`;
       if (!this.playerTexts.some((p) => squash(p.text).includes(quote))) {
-        return `${head}: quote「${ch.quote.slice(0, 30)}」がプレイヤーの発言に見つかりません。言い換えず、発言をそのまま引用してください。プレイヤーが言っていないことでは解消できません`;
+        return `${head}: quote「${ch.quote.slice(0, 30)}」がプレイヤーの発言に見つかりません。言い換えず、発言をそのまま引用してください。プレイヤーが言っていないことは根拠にできません`;
       }
     }
     if (covered.filter(Boolean).length < condition.length * MIN_CHECK_COVERAGE) {
       const missing = [...condition].filter((_, i) => !covered[i]).join("");
-      return `${head}: 解消条件の一部の点にしか、プレイヤーの発言が挙がっていません (挙がっていない部分:「${missing.slice(0, 40)}」)。${how}`;
+      return `${head}: ${name}の一部の点にしか、プレイヤーの発言が挙がっていません${show ? ` (挙がっていない部分:「${missing.slice(0, 40)}」)` : ""}。${how}`;
     }
+    return null;
+  }
+
+  /** 本質的な課題につながる本音のうち、この返答より前に見つかっている数 (本質を言い当てる手がかり) */
+  private rootCluesFound() {
+    const s = this.scenario!;
+    return [...new Set(s.root_issue.linked)].filter((id) => this.concerns[s.concerns.findIndex((c) => c.id === id)].status !== "hidden").length;
+  }
+
+  /** 本質的な課題を言い当てたとしてよいか。だめなら理由を返す (本質の中身は書かない) */
+  private rootReachError(reach: NonNullable<ReplyInput["root_reach"]>, text: string): string | null {
+    const s = this.scenario!;
+    const head = "本質的な課題への到達 (root_reach)";
+    if (this.root.reached) return `${head}: すでに本質的な課題に届いています。root_reach は付けないでください`;
+    const found = this.rootCluesFound();
+    const needed = this.params.rootClues;
+    if (found < needed) {
+      return `${head}: 手がかりが足りません (本質につながる本音のうち、見つかっているのは ${found} / 必要 ${needed})。手がかりがそろう前の言い当ては、当てずっぽうと同じです。今回は到達にせず、owner はぴんと来ていない反応で、その人の言葉で返してください (答えは言わない)`;
+    }
+    const quote = squash(reach.quote);
+    if (quote.length < MIN_ROOT_QUOTE || !squash(text).includes(quote)) {
+      return `${head}: quote が、プレイヤーの今回の発言に見つかりません。発言のうち、本質的な課題を仮説として言い当てた部分を一字一句そのまま ${MIN_ROOT_QUOTE} 文字以上引用してください。今回の発言が言い当てていないなら、root_reach は付けないでください`;
+    }
+    const how =
+      "到達の条件 (root_issue.reach_when) の点ごとに、{ point: reach_when からそのまま抜き出した部分, quote: それを言い当てたプレイヤーの発言からそのまま抜き出した部分 } を並べてください。言い当てていない点があるなら到達にせず、owner はぴんと来ていない反応で返してください (答えは言わない)";
+    const why = this.coverageError(`${head}の照らし合わせ (checks)`, "到達の条件", s.root_issue.reach_when, reach.checks, how, false);
+    if (why) return why;
+    if (squash(reach.note).length < 4) return `${head}: note (プレイヤーが何を言い当てたか) が必要です`;
     return null;
   }
 
@@ -819,7 +896,7 @@ export class Engine {
     };
     const nonNegotiableLeft = s.concerns.filter((c, i) => c.importance >= NON_NEGOTIABLE && !done(i)).length;
     const type = resolved === total ? "full_agreement" : nonNegotiableLeft === 0 && importance.resolved * 2 >= importance.total ? "compromise" : "carry_over";
-    const score = scoreGame(s, this.concerns.map((c) => c.status));
+    const score = scoreGame(s, this.concerns.map((c) => c.status), this.root.reached);
     this.ending = { type, reason, epilogue, resolved, total, importance, nonNegotiableLeft, score };
     this.phase = "ended";
     this.current = null;
@@ -885,6 +962,16 @@ export class Engine {
           initiative_trust: this.initiativeTrust(c.min_trust),
         };
       }),
+      root: {
+        owner: s.root_issue.owner,
+        text: s.root_issue.text,
+        awareness: s.root_issue.awareness,
+        reach_when: s.root_issue.reach_when,
+        linked: s.root_issue.linked,
+        clues_found: this.rootCluesFound(),
+        clues_needed: this.params.rootClues,
+        reached: this.root.reached,
+      },
     };
   }
 
@@ -925,7 +1012,7 @@ export class Engine {
         type: "review",
         difficulty: this.difficultyName,
         ending: this.ending,
-        note: "対話が終わりました。プレイヤーへの振り返りを submit_review で書いてください。transcript の実際の発言を引いて具体的に。励ましつつ、次に活かせる形で。解消できなかった懸念すべてに、どんな聞き方・どんな案なら届いたかを (reveal_hint / resolved_when を踏まえて) 書くこと。重要度 (importance) の高い本音を優先できたかにも触れる。ending.nonNegotiableLeft が 1 以上なら、譲れない本音が残ったことが持ち帰りの理由。ending.score はエンジンが出したスコアで、プレイヤーにも見えている。このゲームの目的は隠れた本音をあぶり出すことで、重要で引き出しにくい (score.items の revealDifficulty が高い) 本音を引き出すほど高く、解決に導くと解決点も入る。overall でスコアとランクに一言触れ、どの本音で点を伸ばせたか (score.items で取りこぼした、重要度や引き出しにくさの高い本音) を示す。点数は書き換えられない。見つけられなかった本音のうち、話題に触れていたもの (concerns[].probes が 1 以上) は、あと何回 (probes_needed まで) 踏み込めば届いたか、信頼度が足りなかったのかを助言に書く。プレイヤーには信頼度の数値は見えていないので、数値ではなく相手の反応で説明する。concerns[].proposed_by が character の懸念は、プレイヤーの積み重ねで相手から歩み寄ってくれたもの。何が効いたかを具体的に褒める",
+        note: "対話が終わりました。プレイヤーへの振り返りを submit_review で書いてください。transcript の実際の発言を引いて具体的に。励ましつつ、次に活かせる形で。解消できなかった懸念すべてに、どんな聞き方・どんな案なら届いたかを (reveal_hint / resolved_when を踏まえて) 書くこと。重要度 (importance) の高い本音を優先できたかにも触れる。ending.nonNegotiableLeft が 1 以上なら、譲れない本音が残ったことが持ち帰りの理由。ending.score はエンジンが出したスコアで、プレイヤーにも見えている。このゲームの目的は隠れた本音をあぶり出すことで、重要で引き出しにくい (score.items の revealDifficulty が高い) 本音を引き出すほど高く、解決に導くと解決点も入る。overall でスコアとランクに一言触れ、どの本音で点を伸ばせたか (score.items で取りこぼした、重要度や引き出しにくさの高い本音) を示す。点数は書き換えられない。見つけられなかった本音のうち、話題に触れていたもの (concerns[].probes が 1 以上) は、あと何回 (probes_needed まで) 踏み込めば届いたか、信頼度が足りなかったのかを助言に書く。本質的な課題 (root_issue) は、表の本音の奥にある、本人も言葉にできていなかった課題で、スコアの 4 分の 1 を占める。届いた (reached) なら、どの発言で点と点をつなげたかを具体的に褒める。届かなかったなら、overall か improve で必ず触れ、どの本音 (linked) を見比べれば、どんな仮説にたどり着けたかを書く (終了後なので中身に触れてよい)。プレイヤーには信頼度の数値は見えていないので、数値ではなく相手の反応で説明する。concerns[].proposed_by が character の懸念は、プレイヤーの積み重ねで相手から歩み寄ってくれたもの。何が効いたかを具体的に褒める",
         transcript: this.log.map((l) => `${name(l)}: ${l.text}`),
         concerns: s.concerns.map((c, i) => ({
           id: c.id,
@@ -944,6 +1031,7 @@ export class Engine {
           proposed_by: this.concerns[i].proposedBy,
           agreement: this.concerns[i].agreement,
         })),
+        root_issue: { ...s.root_issue, clues_found: this.rootCluesFound(), clues_needed: this.params.rootClues, reached: this.root.reached, note: this.root.note },
         characters: s.characters.map((c) => ({ id: c.id, name: c.name, trust_start: c.trust_start, trust_end: trustValue(this.trustPts.get(c.id)!), openness: c.openness, understanding: c.understanding })),
         trust_history: this.trustHistory,
       };
@@ -993,6 +1081,7 @@ export class Engine {
         proposed_by: this.concerns[i].proposedBy,
         agreement: this.concerns[i].agreement,
       })),
+      root: this.root,
       moods: Object.fromEntries(this.moods),
       ending: this.ending,
       review: this.review,
@@ -1038,9 +1127,17 @@ export class Engine {
       },
       turn: this.turn,
       concerns,
+      root: s && this.publicRoot(s, ended),
       log: this.log,
       ending: this.ending,
       review: this.review,
     };
+  }
+
+  /** 本質的な課題: ゲーム中、届いていなければ枠だけ (中身も持ち主も送らない)。終了後は、届かなくても答え合わせとして公開する */
+  private publicRoot(s: Scenario, ended: boolean): PublicRoot {
+    const r = s.root_issue;
+    if (!this.root.reached && !ended) return { status: "hidden" };
+    return { status: this.root.reached ? "reached" : "hidden", owner: r.owner, text: r.text, ...(ended && { linked: r.linked }), ...(ended && !this.root.reached && { missed: true }) };
   }
 }
