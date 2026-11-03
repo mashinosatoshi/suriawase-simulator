@@ -259,6 +259,8 @@ export interface AiStatus {
   current: { provider: ProviderId; model: string } | null;
   /** AI の呼び出しに失敗して止まっているとき (再試行を待つ) */
   error: string | null;
+  /** 一時的な失敗 (混雑・通信の乱れ) で、自動で再試行しているあいだの案内。止まってはいない */
+  notice: string | null;
 }
 
 /** 終了後に AI が書く振り返り */

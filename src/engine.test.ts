@@ -628,7 +628,7 @@ const reviewInput = (ids: string[]) => ({
   overall: "予算を丁寧に尋ねたのは良かったが、他の人の事情までは聞けなかった。",
   good: ["最初に予算を気遣って尋ねた"],
   improve: ["渡し守の暮らしにも触れてみる"],
-  concerns: ids.map((id) => ({ id, advice: `${id} は、聞き方を変えれば届いたはず` })),
+  concerns: ids.map((id) => ({ id, advice: "もう少し聞き方を変えれば、届いたはず。" })),
 });
 
 test("終了すると AI に振り返りの依頼が届く (隠し情報つき・会話の全文つき)", () => {

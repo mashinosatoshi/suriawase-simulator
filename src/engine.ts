@@ -921,9 +921,13 @@ export class Engine {
     for (const id of unresolved) if (!given.has(id)) errors.push(`concerns: 未解消の懸念 "${id}" への助言がありません`);
     const r = parsed.data;
     const texts: Array<[string, string]> = [["overall", r.overall], ...r.good.map((t, i): [string, string] => [`good[${i}]`, t]), ...r.improve.map((t, i): [string, string] => [`improve[${i}]`, t]), ...r.concerns.map((c, i): [string, string] => [`concerns[${i}].advice`, c.advice])];
+    // 懸念やキャラクターの id (c5・mayor など) は、プレイヤーには見えない。振り返りの文に書かせない
+    const ids = [...s.concerns.map((c) => c.id), ...s.characters.map((c) => c.id)];
     for (const [where, text] of texts) {
       const kind = findUnsafeOutput(text);
       if (kind) errors.push(unsafeMessage(where, kind));
+      const leaked = ids.find((id) => new RegExp(`(?<![A-Za-z0-9_])${id}(?![A-Za-z0-9_])`).test(text));
+      if (leaked) errors.push(`${where} に、内部の ID「${leaked}」が出ています。ID はプレイヤーには見えません。懸念は内容 (例: 部費の管理の話)、人は名前や役割で書いてください`);
     }
     if (errors.length) return fail(...errors);
     this.review = parsed.data;
@@ -1062,7 +1066,11 @@ export class Engine {
    * AI 用の完全な状態 (隠し情報を含む。ブラウザには絶対に送らない)。
    * wholeLog = 会話をすべて含める (対話の途中から別の AI が引き継ぐとき。ふだんは直近だけ)
    */
-  fullState({ wholeLog = false } = {}) {
+  /**
+   * wholeLog = 会話の全文 / recent = 直近の会話の行数 (0 なら会話は付けない) / playerLines = プレイヤーのこれまでの全発言 (引用の根拠に使える) /
+   * pending = いまの仕事を含める。内蔵 GM が会話を作り直すときは、仕事を別に渡すので含めない
+   */
+  fullState({ wholeLog = false, recent = 12, playerLines = false, pending = true }: { wholeLog?: boolean; recent?: number; playerLines?: boolean; pending?: boolean } = {}) {
     const s = this.scenario;
     return {
       phase: this.phase,
@@ -1085,8 +1093,9 @@ export class Engine {
       moods: Object.fromEntries(this.moods),
       ending: this.ending,
       review: this.review,
-      pending: this.pendingWork(),
-      recent_log: wholeLog ? this.log : this.log.slice(-12),
+      ...(pending && { pending: this.pendingWork() }),
+      recent_log: wholeLog ? this.log : recent > 0 ? this.log.slice(-recent) : [],
+      ...(playerLines && { player_lines: this.playerTexts }),
     };
   }
 

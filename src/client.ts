@@ -509,7 +509,7 @@ function renderSetup(s: PublicState) {
   const key = !show
     ? "hidden"
     : generating
-      ? `generating:${s.ai.mode}:${s.ai.connected}:${s.ai.error ?? ""}`
+      ? `generating:${s.ai.mode}:${s.ai.connected}:${s.ai.error ?? ""}:${s.ai.notice ?? ""}`
       : aiStep
         ? `ai:${!!s.scenario}:${composeNew}`
         : `story:${!!s.scenario}:${composeNew}:${s.ai.mode}:${s.ai.label}`;
@@ -523,6 +523,7 @@ function renderSetup(s: PublicState) {
         { class: "dialog center" },
         !s.ai.error && h("div", { class: "spinner" }),
         h("h2", {}, s.ai.error ? "シナリオを作れませんでした" : "AI がシナリオを考えています…"),
+        !s.ai.error && s.ai.notice && h("p", { class: "muted text-sm" }, `⏳ ${s.ai.notice}`),
         aiErrorBox(s),
         aiHint(s),
         h(
@@ -899,11 +900,12 @@ function render() {
   $("aichange").hidden = s.ai.mode !== "builtin";
   // 会話中に AI の呼び出しが止まったら、入力欄の上に知らせる (シナリオ作成中・終了後はそれぞれの画面で出す)
   const banner = $("aierror");
-  const showBanner = !!s.ai.error && s.phase === "ai_turn";
-  banner.hidden = !showBanner;
-  if (showBanner && banner.dataset.msg !== s.ai.error) {
-    banner.dataset.msg = s.ai.error!;
-    banner.replaceChildren(aiErrorBox(s, true) || "");
+  const bannerMsg = s.phase === "ai_turn" ? (s.ai.error ?? s.ai.notice) : null;
+  banner.hidden = !bannerMsg;
+  if (bannerMsg && banner.dataset.msg !== bannerMsg) {
+    banner.dataset.msg = bannerMsg;
+    // 止まっているときは再試行ボタンつき。自動で再試行している間は、案内だけ (止まってはいない)
+    banner.replaceChildren(s.ai.error ? aiErrorBox(s, true) || "" : h("div", { class: "aierr info" }, h("span", {}, `⏳ ${bannerMsg}`)));
   }
   $("title").textContent = s.scenario?.title ?? "";
   renderPremise(s);

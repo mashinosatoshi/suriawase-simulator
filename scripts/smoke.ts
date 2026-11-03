@@ -230,7 +230,7 @@ try {
   assert.equal(rv.type, "review");
   assert.ok(rv.transcript.some((t: string) => t.includes("朗読会")));
   assert.equal(rv.concerns.find((c: { id: string }) => c.id === "c2").reveal_hint, "店の思い出を聞く");
-  const advice = (ids: string[]) => ids.map((id) => ({ id, advice: `${id} は、聞き方を変えれば届いたはず` }));
+  const advice = (ids: string[]) => ids.map((id) => ({ id, advice: "もう少し聞き方を変えれば、届いたはず。" }));
   const review = (ids: string[]) => ({ overall: "朗読会の提案は具体的で良かった。他の事情にも踏み込めるとさらに良い。", good: ["赤字の話に具体案を出せた"], improve: ["店の思い出も聞いてみる"], concerns: advice(ids) });
   const lacking = await call("submit_review", review(["c1"]));
   assert.ok(lacking.problems?.some((p: string) => p.includes('"c2"')), "助言の不足が弾かれていない");
