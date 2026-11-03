@@ -9,6 +9,13 @@ import { GAME_TOOLS, toolJsonSchema, type GameToolName } from "./tools.js";
 /** 1 つの仕事に使う API 呼び出しの上限。超えたら止めて、プレイヤーの「再試行」を待つ (際限なく課金しない) */
 export const MAX_ATTEMPTS = 4;
 
+/**
+ * プレイヤーの発言への返答で差し戻しが続いたとき、最後の試行に添える。進められない懸念の更新にこだわって
+ * 上限まで使い切り、対話が止まるのを防ぐ (自動の試遊で、軽いモデルに見られた)。懸念は次のターン以降に進められる
+ */
+export const LAST_TRY_NOTE =
+  "これが最後の試行です。今回は concern_updates を付けず (懸念は進めず)、台詞 (lines) だけで返答してください。対話を締めくくるターンなら epilogue も付けてください。懸念は、次のターン以降に根拠がそろってから進めます。";
+
 const EXPECTED: Record<Work["type"], GameToolName> = { new_game: "start_scenario", player_action: "reply", review: "submit_review" };
 const TOOL_SPECS = GAME_TOOLS.map((t) => ({ name: t.name, description: t.description, parameters: toolJsonSchema(t) }));
 
@@ -191,7 +198,7 @@ export class BuiltinGm {
       }
       lastProblem = results.filter((r) => r.isError).map((r) => r.content).join("\n");
       this.log(`AI の返答を差し戻しました (${attempt}/${MAX_ATTEMPTS}): ${shorten(lastProblem.replace(/\s+/g, " "), 160)}`);
-      input = { toolResults: results };
+      input = { toolResults: results, ...(attempt + 1 === MAX_ATTEMPTS && work.type === "player_action" ? { text: LAST_TRY_NOTE } : {}) };
     }
 
     this.pending = input.toolResults ?? [];
