@@ -43,7 +43,7 @@ const AI_TIMEOUT_MS = 90_000;
 let lastMcpActivity = 0;
 let mcpConnected = false;
 
-const aiStatus = (): AiStatus => ({ mode: "mcp", label: mcpConnected ? "Claude Code (MCP)" : "未接続", connected: mcpConnected, providers: [], current: null, error: null });
+const aiStatus = (): AiStatus => ({ mode: "mcp", label: mcpConnected ? "Claude Code (MCP)" : "未接続", connected: mcpConnected, providers: [], current: null, error: null, notice: null });
 
 const clients = new Set<ServerResponse>();
 const snapshot = (e: Engine) => JSON.stringify({ ...e.publicState(), ai: aiStatus() });

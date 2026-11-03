@@ -82,7 +82,12 @@ const scenario = {
   root_issue: {
     owner: "owner",
     text: "店をやめると、人と関わる場も自分の役目も一度に失い、独りになってしまうのが怖い",
-    linked: ["c2", "c3"],
+    linked: ["c1", "c2", "c3"],
+    cascade: [
+      { id: "c1", how: "店が人と関わる居場所として続く見通しが立てば、赤字を減らす手立てにも前向きに向き合える" },
+      { id: "c2", how: "店と自分の役目が別の形で残ると思えれば、亡き妻と始めた店を畳む辛さも和らぐ" },
+      { id: "c3", how: "人と関わる場が店の外にもできれば、常連の居場所を守る形も一緒に考えられる" },
+    ],
     awareness: "unspoken",
     reach_when: "店主自身の居場所と人とのつながりが店と一体になっていることと、店をやめると独りになる不安を言い当てる",
   },
@@ -230,7 +235,7 @@ try {
   assert.equal(rv.type, "review");
   assert.ok(rv.transcript.some((t: string) => t.includes("朗読会")));
   assert.equal(rv.concerns.find((c: { id: string }) => c.id === "c2").reveal_hint, "店の思い出を聞く");
-  const advice = (ids: string[]) => ids.map((id) => ({ id, advice: `${id} は、聞き方を変えれば届いたはず` }));
+  const advice = (ids: string[]) => ids.map((id) => ({ id, advice: "もう少し聞き方を変えれば、届いたはず。" }));
   const review = (ids: string[]) => ({ overall: "朗読会の提案は具体的で良かった。他の事情にも踏み込めるとさらに良い。", good: ["赤字の話に具体案を出せた"], improve: ["店の思い出も聞いてみる"], concerns: advice(ids) });
   const lacking = await call("submit_review", review(["c1"]));
   assert.ok(lacking.problems?.some((p: string) => p.includes('"c2"')), "助言の不足が弾かれていない");

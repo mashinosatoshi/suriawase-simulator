@@ -67,6 +67,8 @@ export interface PublicRoot {
   text?: string;
   /** 終了後だけ: この課題につながっていた本音 (答え合わせ) */
   linked?: string[];
+  /** 終了後だけ: この課題が解消されたら、つながっていた本音がそれぞれどう解消に向かうか (芋づる式) */
+  cascade?: Array<{ id: string; how: string }>;
   /** 終了後、たどり着けなかった */
   missed?: boolean;
 }
@@ -259,6 +261,8 @@ export interface AiStatus {
   current: { provider: ProviderId; model: string } | null;
   /** AI の呼び出しに失敗して止まっているとき (再試行を待つ) */
   error: string | null;
+  /** 一時的な失敗 (混雑・通信の乱れ) で、自動で再試行しているあいだの案内。止まってはいない */
+  notice: string | null;
 }
 
 /** 終了後に AI が書く振り返り */

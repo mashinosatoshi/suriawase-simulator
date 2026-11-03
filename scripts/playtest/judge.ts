@@ -53,6 +53,14 @@ export const reportSchema = z.object({
         .min(1)
         .max(5)
         .describe("本質的な課題の作り込み。5 = つながる本音どうしを見比べると腑に落ちる、場面と人物に固有の深い課題 / 3 = それらしいが、やや一般的 / 1 = 表の本音の言い換えか、どんな話にも当てはまる一般論"),
+      cascade: z
+        .number()
+        .int()
+        .min(1)
+        .max(5)
+        .describe(
+          "芋づる式になっているか。5 = この課題が解消されたら、linked の本音の多くが自然に解消に向かうと納得でき、cascade の説明も具体的 / 3 = 一部しか納得できない / 1 = 本音を束ねているだけで、解消しても linked の本音は動かない (感情の名前だけ、表の本音の言い換えなど)",
+        ),
       reach: z.enum(REACH_VERDICTS).describe("到達の判定は妥当だったか。届いたなら、プレイヤーの仮説が本当に到達の条件を言い当てていたか。届かなかったなら、言い当てていたのに認められなかった (厳しすぎる) か"),
       comment: z.string().min(1).max(400).describe("理由。届いたターンの owner の反応 (腑に落ちた反応になっていたか) にも触れる"),
     })
@@ -82,6 +90,7 @@ ${CATEGORY_HELP}
 ## 本質的な課題 (root_issue) の評価
 シナリオには、表の本音 (concerns) の奥に、本質的な課題が 1 つある。いくつもの本音 (linked) の根っこにあり、本人も言葉にできていない。プレイヤーが本音どうしをつなげて仮説として言い当てたときだけ「届いた」になる。
 - depth: 本質的な課題として成り立っているか。linked の本音を並べると「根っこはこれか」と腑に落ちるか。表の本音の言い換えや、どんな話にも当てはまる一般論になっていないか。
+- cascade: 本質的な課題は、解消すると形式的な課題 (表の本音) の多くが芋づる式に解消に向かう、根っこの原因でなければならない。root_issue.cascade の「この課題が解消されたら、その本音はどう解消に向かうか」が、本音ごとに納得できるか。linked の本音が、本当にこの課題から生まれたものに見えるか。「不安」「孤独」のような感情の名前だけで、手当てできる原因になっていないものは低くつける。
 - reach: 到達の判定が妥当だったか。届いたなら、そのターンのプレイヤーの発言が到達の条件 (reach_when) を本当に言い当てていたか (一般論や要素の欠けた仮説で届いていれば「甘い」)。届かなかったなら、言い当てていたのに認められなかったか (「厳しすぎる」)。プレイヤーが言い当てを試みていなければ「言い当ての試みなし」。
 - 登場人物が、届く前に本質的な課題を自分から話していたら、issues に「聞かれていないことを話す」として挙げる。`;
 
@@ -117,7 +126,15 @@ export function material(sc: Scenario, lines: TranscriptLine[], rootReached: boo
     briefing: sc.briefing,
     characters: sc.characters.map((c) => ({ name: c.name, role: c.role, persona: c.persona, speech: c.speech, sample_lines: c.sample_lines })),
     concerns: sc.concerns.map((c) => ({ owner: nameOf(c.owner), text: c.text, reveal_hint: c.reveal_hint })),
-    root_issue: { owner: nameOf(r.owner), text: r.text, linked: r.linked.map((id) => sc.concerns.find((c) => c.id === id)?.text ?? id), awareness: r.awareness, reach_when: r.reach_when, reached: rootReached },
+    root_issue: {
+      owner: nameOf(r.owner),
+      text: r.text,
+      linked: r.linked.map((id) => sc.concerns.find((c) => c.id === id)?.text ?? id),
+      cascade: r.cascade.map((c) => ({ concern: sc.concerns.find((k) => k.id === c.id)?.text ?? c.id, how: c.how })),
+      awareness: r.awareness,
+      reach_when: r.reach_when,
+      reached: rootReached,
+    },
   };
   return `## 設定\n${JSON.stringify(setup, null, 1)}\n\n## 会話\n${formatTranscript(lines)}`;
 }

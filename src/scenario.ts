@@ -96,13 +96,23 @@ export const rootIssueSchema = z.object({
     .min(10)
     .max(160)
     .describe(
-      "【AI専用・到達後に公開】本質的な課題を一文で。owner 本人も言葉にできていない、linked の本音すべての根っこにある課題。linked の本音を見比べると「根っこはこれか」とつながるものにする。表の本音の言い換えや、どんな話にも当てはまる一般論 (「将来が不安」「信頼関係が足りない」など) にせず、この場面と人物に固有の、具体的な課題にする",
+      "【AI専用・到達後に公開】本質的な課題を一文で。owner 本人も言葉にできていない、linked の本音すべての根っこにある原因。これが解消されると、形式的な課題 (表の本音) の多くが芋づる式に解消に向かう、というものにする。linked の本音を見比べると「根っこはこれか」とつながるものにする。「不安」「孤独」のような感情の名前だけ、全体を束ねるだけの言葉、表の本音の言い換え、どんな話にも当てはまる一般論 (「将来が不安」「信頼関係が足りない」など) にせず、手当てできる原因 (思い込み・決め方・役割の持ち方・関係・時間の使い方など) として、この場面と人物に固有の、具体的な課題にする",
     ),
   linked: z
     .array(id)
     .min(2)
     .max(MAX_CONCERNS)
-    .describe("この課題から生まれている本音 (concerns の id)。difficulty.root_clues 個以上。どれか 1 つだけを見ても本質は分からないが、並べるとつながる組み合わせにする"),
+    .describe("この課題から生まれている本音 (concerns の id)。本音全体の半数を超える数 (difficulty.root_linked 個以上)。どれか 1 つだけを見ても本質は分からないが、並べるとつながる組み合わせにする。この課題が解消されたら解消に向かうと言える本音だけを入れる"),
+  cascade: z
+    .array(
+      z.object({
+        id,
+        how: z.string().min(8).max(160).describe("この課題が解消されたら、その本音がどう解消に向かうか。1 文で、具体的に (例: 「担い手の不安が晴れれば、予算を抑える案も受け入れられる」)"),
+      }),
+    )
+    .min(2)
+    .max(MAX_CONCERNS)
+    .describe("【AI専用・終了後に公開】linked の本音ごとに、この課題が解消されたら、その本音がどう解消に向かうか。linked と同じ本音を、過不足なく挙げる。書けない本音は linked に入れない"),
   awareness: z
     .enum(["unaware", "unspoken"])
     .describe(
@@ -334,8 +344,20 @@ function checkRootIssue(s: Scenario, d: DifficultyBrief, charIds: Set<string>, c
   const unknown = r.linked.filter((id) => !concernIds.has(id));
   if (unknown.length) errors.push(`root_issue.linked の ${unknown.join(", ")} は懸念 (concerns) に存在しません`);
   if (new Set(r.linked).size !== r.linked.length) errors.push("root_issue.linked に同じ懸念が重複しています");
-  if (new Set(r.linked).size < d.root_clues) {
-    errors.push(`難易度「${d.label}」では、本質的な課題につながる本音 (root_issue.linked) を ${d.root_clues} 個以上にしてください (いま ${new Set(r.linked).size} 個)`);
+  const linked = new Set(r.linked);
+  if (linked.size < d.root_linked) {
+    errors.push(
+      `難易度「${d.label}」では、本質的な課題につながる本音 (root_issue.linked) を ${d.root_linked} 個以上にしてください (本音全体 ${d.concerns} 個の半数を超える数。いま ${linked.size} 個)。本質的な課題は、解消すると、形式的な課題 (表の本音) の多くが芋づる式に解消に向かう、根っこの原因にします`,
+    );
+  }
+  // linked の本音ごとに、この課題が解消されたらどう解消に向かうかを書かせる (書けない本音は、根っこから生まれたものではない)
+  const cascaded = r.cascade.map((c) => c.id);
+  if (new Set(cascaded).size !== cascaded.length) errors.push("root_issue.cascade に同じ本音が重複しています");
+  const lacking = [...linked].filter((id) => !cascaded.includes(id));
+  const extra = cascaded.filter((id) => !linked.has(id));
+  if (lacking.length || extra.length) {
+    const why = [lacking.length && `足りない: ${lacking.join(", ")}`, extra.length && `linked にない: ${extra.join(", ")}`].filter(Boolean).join(" / ");
+    errors.push(`root_issue.cascade は、linked の本音を過不足なく挙げてください (${why})。書けない本音は、根っこから生まれたものではないので、linked から外してください`);
   }
   if (d.root_awareness !== "any" && r.awareness !== d.root_awareness) {
     errors.push(`難易度「${d.label}」では、root_issue.awareness を ${d.root_awareness} にしてください (${d.root_awareness === "unaware" ? "owner 本人も気づいていない" : "薄々わかっているが言葉にしていない"})`);
