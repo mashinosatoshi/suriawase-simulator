@@ -22,7 +22,6 @@ import {
   type LogLine,
   type PublicCharacter,
   type PublicConcern,
-  type PublicRoot,
   type PublicState,
   type GameScore,
 } from "./shared.js";
@@ -168,29 +167,8 @@ function renderSide(s: PublicState) {
       ),
     ),
   );
-  // 本質的な課題は、届くまで出さない (そういう課題があること自体、見せない)。本音は空から始まり、見つかった分だけ増える (総数は見せない)
-  $("board").replaceChildren(
-    ...(s.root ? [rootCard(s, s.root)] : []),
-    ...(s.concerns.length ? s.concerns.map((c) => concernCard(s, c)) : [h("div", { class: "empty" }, "まだ何も見えていません。相手の話を聞いてみましょう。")]),
-  );
-}
-
-/**
- * 本質的な課題のカード。届いたとき (ボードの先頭) と、終了後の答え合わせ (届かなくても、中身とつながっていた本音を出す) にだけ出す
- */
-function rootCard(s: PublicState, r: PublicRoot) {
-  const owner = r.owner ? charOf(s, r.owner) : undefined;
-  const linked = (r.linked ?? []).map((id) => s.concerns.find((c) => c.id === id)?.category ?? id);
-  const state = r.status === "reached" ? "到達" : r.missed ? "たどり着けなかった" : "未到達";
-  return h(
-    "div",
-    { class: `concern root ${r.status}${r.missed ? " missed" : ""}` },
-    h("div", { class: "top" }, h("span", {}, "💡"), owner && h("span", {}, owner.emoji), h("span", { class: "cat" }, "本質的な課題"), h("span", { class: "st" }, state)),
-    h("div", {}, r.text ?? ""),
-    linked.length > 0 && h("div", { class: "sub" }, `つながっていた本音: ${linked.join("・")}`),
-    // 答え合わせ: この課題が解消されたら、つながっていた本音がどう解消に向かうか (芋づる式)
-    (r.cascade?.length ?? 0) > 0 && h("div", { class: "sub cascade" }, h("div", {}, "この課題が解消されると:"), ...r.cascade!.map((c) => h("div", {}, `・${s.concerns.find((k) => k.id === c.id)?.category ?? c.id}: ${c.how}`))),
-  );
+  // 空から始まり、本音が見つかった分だけ増える (総数は見せない)
+  $("board").replaceChildren(...(s.concerns.length ? s.concerns.map((c) => concernCard(s, c)) : [h("div", { class: "empty" }, "まだ何も見えていません。相手の話を聞いてみましょう。")]));
 }
 
 /** ボードのカードは本音の内容と状態だけ。重要度・合意内容・助言は、終了後の画面にだけ出す (重要度と合意内容は、終了後にしか届かない) */
@@ -692,7 +670,7 @@ function difficultyPicker(initial: Difficulty, onPick: (d: Difficulty) => void) 
 
 const range = (min: number, max: number) => Array.from({ length: max - min + 1 }, (_, i) => min + i);
 const PARAM_GROUPS: Array<[string, Array<keyof DifficultyParams>]> = [
-  ["シナリオ", ["concerns", "openAtStart", "nonNegotiable", "rootClues", "turnsPerConcern"]],
+  ["シナリオ", ["concerns", "openAtStart", "nonNegotiable", "turnsPerConcern"]],
   ["相手 (登場人物の平均)", ["trustStart", "openness", "understanding"]],
   ["相手からの歩み寄り", ["initiativeTurns", "initiativeTrust", "initiativeCooldown"]],
 ];
@@ -716,7 +694,7 @@ function paramsPanel(level: () => Difficulty, onChange: () => void) {
   el.hidden = level() === "random";
   let p: DifficultyParams = { ...(tunedParams ?? preset) };
   const update = (next: DifficultyParams, focusKey?: string) => {
-    p = { ...next, openAtStart: Math.min(next.openAtStart, next.concerns), rootClues: Math.min(next.rootClues, next.concerns) };
+    p = { ...next, openAtStart: Math.min(next.openAtStart, next.concerns) };
     tunedParams = sameParams(p, preset) ? null : { ...p };
     onChange();
     draw();
@@ -724,7 +702,7 @@ function paramsPanel(level: () => Difficulty, onChange: () => void) {
   };
   const row = (key: keyof DifficultyParams) => {
     const spec = PARAM_SPECS[key];
-    const options = range(spec.min, key === "openAtStart" || key === "rootClues" ? Math.min(spec.max, p.concerns) : spec.max);
+    const options = range(spec.min, key === "openAtStart" ? p.concerns : spec.max);
     const select = h("select", { "data-key": key, "aria-label": spec.label }, ...options.map((v) => h("option", { value: String(v) }, paramText(key, v))));
     select.value = String(p[key]);
     select.addEventListener("change", () => update({ ...p, [key]: Number(select.value) }, key));
@@ -770,8 +748,8 @@ function randomParamsBlock(p: DifficultyParams) {
 }
 
 /**
- * 終了後に「会話を書き出す」でコピーする、1 つのテキスト。結果・スコア・本質的な課題・合意事項と持ち越し (合意書)・振り返りに、会話の全文を添える。
- * 後から読み返したり、AI に読ませて調べたりできる (見つけられなかった本音や本質的な課題も、終了後なので中身が入る)
+ * 終了後に「会話を書き出す」でコピーする、1 つのテキスト。結果・スコア・合意事項と持ち越し (合意書)・振り返りに、会話の全文を添える。
+ * 後から読み返したり、AI に読ませて調べたりできる (見つけられなかった本音も、終了後なので中身が入る)
  */
 function exportMarkdown(s: PublicState) {
   const e = s.ending!;
@@ -790,13 +768,7 @@ function exportMarkdown(s: PublicState) {
     "",
     e.epilogue,
   ];
-  if (s.root?.text) {
-    const linked = (s.root.linked ?? []).map(categoryOf).join("・");
-    lines.push("", "## 本質的な課題", `- ${s.root.status === "reached" ? "届いた" : "たどり着けなかった"}: ${s.root.text}`, ...(linked ? [`- つながっていた本音: ${linked}`] : []));
-    // この課題が解消されたら、つながっていた本音がどう解消に向かうか (芋づる式)
-    if (s.root.cascade?.length) lines.push("- この課題が解消されると:", ...s.root.cascade.map((c) => `  - ${categoryOf(c.id)}: ${c.how}`));
-  }
-  lines.push("", "## スコアの内訳", `- 本質的な課題: ${e.score.root.points} / ${e.score.root.maxPoints}`);
+  lines.push("", "## スコアの内訳");
   lines.push(...[...e.score.items].sort((x, y) => y.maxPoints - x.maxPoints).map((x) => `- ${categoryOf(x.id)} (重要度 ${x.importance}・引き出しにくさ ${x.revealDifficulty}): ${x.discoverPoints + x.resolvePoints} / ${x.maxPoints} (${x.resolved ? "解決" : x.discovered ? "引き出した" : "見つけられなかった"})`));
   const done = s.concerns.filter((c) => c.status === "resolved");
   lines.push("", "## 合意事項", ...(done.length ? done.map((c) => `- ${tag(c)} ${c.text} → ${c.agreement}`) : ["- (なし)"]));
@@ -848,13 +820,6 @@ function scoreBlock(s: PublicState, score: GameScore) {
         h("small", {}, `${state} — 引き出し ${x.discoverPoints} 点 · 解決 ${x.resolvePoints} 点 (難しさ ${rate(x.resolveRate)})`),
       );
     });
-  const root = h(
-    "div",
-    { class: `srow${score.root.points ? "" : " zero"}` },
-    h("span", { class: "sname" }, "💡 本質的な課題"),
-    h("span", { class: "spts" }, `${score.root.points} / ${score.root.maxPoints}`),
-    h("small", {}, score.root.reached ? "届いた — 本音どうしをつなげて、その奥にある課題を言い当てた" : "届かなかった — 表の本音をすべて解決しても、ここに届かなければ満点の 4 分の 3 まで"),
-  );
   return h(
     "div",
     { class: "score" },
@@ -862,9 +827,9 @@ function scoreBlock(s: PublicState, score: GameScore) {
     h(
       "p",
       { class: "muted text-sm" },
-      "相手の隠れた本音を引き出すと「引き出し点」が入ります。重要な本音ほど、引き出しにくい本音 (打ち解けるまで話さない・頑なな人の本音) ほど高い点です。解決に導くと「解決点」も入ります。本音の奥にある本質的な課題に届くと、満点の 4 分の 1 が入ります。",
+      "相手の隠れた本音を引き出すと「引き出し点」が入ります。重要な本音ほど、引き出しにくい本音 (打ち解けるまで話さない・頑なな人の本音) ほど高い点です。解決に導くと「解決点」も入ります。",
     ),
-    h("details", {}, h("summary", {}, "スコアの内訳"), root, ...rows),
+    h("details", {}, h("summary", {}, "スコアの内訳"), ...rows),
   );
 }
 
@@ -928,7 +893,6 @@ function renderEnding(s: PublicState) {
         scoreBlock(cur, cur.ending.score),
         h("p", { class: "muted center" }, cur.ending.epilogue),
         reviewBlock(cur),
-        cur.root && h("div", {}, sectionTitle("本質的な課題"), rootCard(cur, cur.root)),
         h("div", {}, sectionTitle("合意事項"), ...(done.length ? done.map((c) => concernCard(cur, c, true)) : [h("p", { class: "muted" }, "なし")])),
         rest.length > 0 && h("div", {}, sectionTitle("持ち越し・見つけられなかった懸念"), ...rest.map((c) => concernCard(cur, c, false, advice.get(c.id)))),
         h(

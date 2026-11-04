@@ -86,47 +86,6 @@ export const concernSchema = z.object({
     .describe("【AI専用・解消後に公開】解消の条件。具体的で後から検証できる形に (例: 「渡し守が仕事を失わない案が示される」)。「納得したら」のような曖昧な書き方は不可"),
 });
 
-// 本質的な課題: 表の本音 (本人が隠しているが、わかっている) とは別の、いくつもの本音の根っこ。
-// 本人も言葉にできていない (気づいていない・薄々わかっているが言葉にしていない) ので、質問しても出てこない。
-// プレイヤーが、見つけた本音どうしをつなげて仮説として言い当てたときだけ開く
-export const rootIssueSchema = z.object({
-  owner: id.describe("この課題を抱えているキャラクターの id"),
-  text: z
-    .string()
-    .min(10)
-    .max(160)
-    .describe(
-      "【AI専用・到達後に公開】本質的な課題を一文で。owner 本人も言葉にできていない、linked の本音すべての根っこにある原因。これが解消されると、形式的な課題 (表の本音) の多くが芋づる式に解消に向かう、というものにする。linked の本音を見比べると「根っこはこれか」とつながるものにする。「不安」「孤独」のような感情の名前だけ、全体を束ねるだけの言葉、表の本音の言い換え、どんな話にも当てはまる一般論 (「将来が不安」「信頼関係が足りない」など) にせず、手当てできる原因 (思い込み・決め方・役割の持ち方・関係・時間の使い方など) として、この場面と人物に固有の、具体的な課題にする",
-    ),
-  linked: z
-    .array(id)
-    .min(2)
-    .max(MAX_CONCERNS)
-    .describe("この課題から生まれている本音 (concerns の id)。本音全体の半数を超える数 (difficulty.root_linked 個以上)。どれか 1 つだけを見ても本質は分からないが、並べるとつながる組み合わせにする。この課題が解消されたら解消に向かうと言える本音だけを入れる"),
-  cascade: z
-    .array(
-      z.object({
-        id,
-        how: z.string().min(8).max(160).describe("この課題が解消されたら、その本音がどう解消に向かうか。1 文で、具体的に (例: 「担い手の不安が晴れれば、予算を抑える案も受け入れられる」)"),
-      }),
-    )
-    .min(2)
-    .max(MAX_CONCERNS)
-    .describe("【AI専用・終了後に公開】linked の本音ごとに、この課題が解消されたら、その本音がどう解消に向かうか。linked と同じ本音を、過不足なく挙げる。書けない本音は linked に入れない"),
-  awareness: z
-    .enum(["unaware", "unspoken"])
-    .describe(
-      "owner の気づき。unaware = 本人も気づいていない (言い当てられて「言われてみれば…」と気づく) / unspoken = 薄々わかっているが言葉にしていない (「実は、そうなんです」と認める)。difficulty.root_awareness に従う (any なら persona に合わせる)",
-    ),
-  reach_when: z
-    .string()
-    .min(10)
-    .max(250)
-    .describe(
-      "【AI専用・到達後に公開】プレイヤーが何を言い当てれば、本質的な課題に届いたとするか。言い当てに要る具体的な要素を 2〜3 点 (例: 「村の担い手が減っていること」と「橋の場所へのこだわりが、その不安の表れであること」を言い当てる)。一般論では満たせない書き方にする",
-    ),
-});
-
 export const scenarioShape = {
   title: z.string().min(1).max(30),
   premise: z.string().min(10).max(300).describe("【公開】状況説明。プレイヤーが最初に読む"),
@@ -150,9 +109,6 @@ export const scenarioShape = {
     .min(PARAM_SPECS.concerns.min)
     .max(MAX_CONCERNS)
     .describe("隠された懸念。数は難易度で決まる (new_game の difficulty.concerns ちょうど)。互いに少しトレードオフになると面白い"),
-  root_issue: rootIssueSchema.describe(
-    "【AI専用】本質的な課題 (1 つ)。表の本音とは別の、いくつもの本音 (linked) の根っこにある、owner 本人も言葉にできていない課題。プレイヤーが本音どうしをつなげて言い当てたときだけ開く。表の本音を解決しても、ここに届かなければ本当の解決にはならない、という位置づけ",
-  ),
   opening: z
     .array(z.object({ speaker: z.string(), text: z.string().min(1).max(400) }))
     .min(1)
@@ -332,53 +288,6 @@ export function checkScenario(s: Scenario, d: DifficultyBrief): string[] {
       `難易度「${d.label}」では、最初から話せる本音 (min_trust が owner の trust_start 以下) をちょうど ${d.open_at_start} 個にしてください (いま ${open.length} 個${open.length ? `: ${open.join(", ")}` : ""})。残りの min_trust は、owner の trust_start + 1 〜 ${MAX_LEVEL - 1} にする`,
     );
   }
-  errors.push(...checkRootIssue(s, d, charIds, concernIds));
-  return errors;
-}
-
-/** 本質的な課題の整合性。表の本音の言い換えになっていないか・公開される文に書いていないかは、文の重なりで見る (深さそのものは見分けられない) */
-function checkRootIssue(s: Scenario, d: DifficultyBrief, charIds: Set<string>, concernIds: Set<string>): string[] {
-  const errors: string[] = [];
-  const r = s.root_issue;
-  if (!charIds.has(r.owner)) errors.push(`root_issue の owner "${r.owner}" がキャラクターに存在しません`);
-  const unknown = r.linked.filter((id) => !concernIds.has(id));
-  if (unknown.length) errors.push(`root_issue.linked の ${unknown.join(", ")} は懸念 (concerns) に存在しません`);
-  if (new Set(r.linked).size !== r.linked.length) errors.push("root_issue.linked に同じ懸念が重複しています");
-  const linked = new Set(r.linked);
-  if (linked.size < d.root_linked) {
-    errors.push(
-      `難易度「${d.label}」では、本質的な課題につながる本音 (root_issue.linked) を ${d.root_linked} 個以上にしてください (本音全体 ${d.concerns} 個の半数を超える数。いま ${linked.size} 個)。本質的な課題は、解消すると、形式的な課題 (表の本音) の多くが芋づる式に解消に向かう、根っこの原因にします`,
-    );
-  }
-  // linked の本音ごとに、この課題が解消されたらどう解消に向かうかを書かせる (書けない本音は、根っこから生まれたものではない)
-  const cascaded = r.cascade.map((c) => c.id);
-  if (new Set(cascaded).size !== cascaded.length) errors.push("root_issue.cascade に同じ本音が重複しています");
-  const lacking = [...linked].filter((id) => !cascaded.includes(id));
-  const extra = cascaded.filter((id) => !linked.has(id));
-  if (lacking.length || extra.length) {
-    const why = [lacking.length && `足りない: ${lacking.join(", ")}`, extra.length && `linked にない: ${extra.join(", ")}`].filter(Boolean).join(" / ");
-    errors.push(`root_issue.cascade は、linked の本音を過不足なく挙げてください (${why})。書けない本音は、根っこから生まれたものではないので、linked から外してください`);
-  }
-  if (d.root_awareness !== "any" && r.awareness !== d.root_awareness) {
-    errors.push(`難易度「${d.label}」では、root_issue.awareness を ${d.root_awareness} にしてください (${d.root_awareness === "unaware" ? "owner 本人も気づいていない" : "薄々わかっているが言葉にしていない"})`);
-  }
-  if (plain(r.text) === plain(r.reach_when)) errors.push("root_issue の text と reach_when が同じです。reach_when には、言い当てに要る具体的な要素を書いてください");
-  for (const c of s.concerns) {
-    if (leaksSecret(r.text, c.text) || leaksSecret(c.text, r.text)) {
-      errors.push(`root_issue.text が、懸念 "${c.id}" の本音とほとんど同じです。本質的な課題は、表の本音の言い換えではなく、いくつもの本音 (linked) の根っこにある別の課題にしてください`);
-    }
-  }
-  // 公開される文と冒頭の台詞に、本質的な課題そのものを書かない
-  const shown: Array<[string, string]> = [
-    ["premise", s.premise],
-    ["goal", s.goal],
-    ...s.briefing.map((b, i): [string, string] => [`briefing[${i}]`, b.text]),
-    ...s.opening.map((o, i): [string, string] => [`opening[${i}]`, o.text]),
-    ...s.characters.flatMap((c, ci) => c.sample_lines.map((t, i): [string, string] => [`characters[${ci}].sample_lines[${i}]`, t])),
-  ];
-  for (const [where, text] of shown) {
-    if (leaksSecret(text, r.text)) errors.push(`${where} に、本質的な課題 (root_issue.text) がほぼそのまま書かれています。プレイヤーが本音をつなげて言い当てるものなので、どこにも書かないでください`);
-  }
   return errors;
 }
 
@@ -486,24 +395,6 @@ export const replyShape = {
     .optional()
     .describe(
       "話題に触れられたが、まだ本音を話さない未発見の本音 (hidden)。owner の信頼度が min_trust に届かない、または digest の probes + 1 が probes_needed (引き出しにくい本音ほど多い) に届かないとき。エンジンが話題に触れられた回数として数え、届いたターンで本音を話せる。記録しないと回数が増えず、いつまでも話せない。本音は話さず、表向きの事情だけを答える (触れられた回数が増えるほど、少しずつ具体的にしてよい)。concern_updates で進める本音は入れない",
-    ),
-  root_reach: z
-    .object({
-      quote: z.string().max(300).describe("プレイヤーの今回の発言から、本質的な課題を言い当てた部分を一字一句そのまま抜き出す (8 文字以上)"),
-      checks: z
-        .array(
-          z.object({
-            point: z.string().max(200).describe("到達の条件 (root_issue.reach_when) のうちの 1 点。reach_when から一字一句そのまま抜き出す"),
-            quote: z.string().max(200).describe("その点を言い当てたプレイヤーの発言 (今回でも過去のターンでもよい) から、一字一句そのまま抜き出す (4 文字以上)"),
-          }),
-        )
-        .max(4)
-        .describe("reach_when の点ごとに、それを言い当てたプレイヤーの発言を並べる照らし合わせ。点をまとめると reach_when のほぼ全体を覆うこと"),
-      note: z.string().max(200).describe("プレイヤーが何を言い当てたか (記録用。プレイヤーには見えない)"),
-    })
-    .optional()
-    .describe(
-      "プレイヤーが本質的な課題 (digest.root) を仮説として言い当てたときだけ付ける。digest.root の clues_found が clues_needed 以上で、reach_when のすべての点を言い当てているとき。一般論 (「将来が不安なんですね」) や、要素が欠けた仮説では付けない (owner は、ぴんと来ていない反応で、その人の言葉で返す。答えは言わない)。付けるターンは、owner がつながりを自分の言葉で語り直す台詞を入れる (unaware: 「言われてみれば…だから自分は〜」 / unspoken: 「実は、そうなんです」)",
     ),
   moods: z
     .array(z.object({ character: z.string(), emoji: z.string().min(1).max(8), label: z.string().min(1).max(12) }))

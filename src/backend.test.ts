@@ -31,18 +31,6 @@ const scenario = {
     { id: "c4", owner: "mayor", category: "安全", text: "子どもが橋から川へ落ちないか心配だ", importance: 4, reveal_hint: "安全のことを尋ねる", min_trust: 7, resolved_when: "子どもを守る備えが示される" },
     { id: "c5", owner: "mayor", category: "工事", text: "工事のあいだ畑への道がふさがる", importance: 3, reveal_hint: "工事の段取りを尋ねる", min_trust: 8, resolved_when: "工事中の迂回路が示される" },
   ],
-  root_issue: {
-    owner: "mayor",
-    text: "村の若い担い手が減り、村の暮らしや祭りをこの先も続けられるかが不安だ",
-    linked: ["c1", "c2", "c3"],
-    cascade: [
-      { id: "c1", how: "担い手の不安が晴れ、村の将来の見通しが立てば、大きな橋にこだわらず、予算内の小さな橋を受け入れられる" },
-      { id: "c2", how: "村の暮らしを続ける手応えがあれば、祭りの行列の道筋が変わることも、受け入れやすくなる" },
-      { id: "c3", how: "村に人が残る見通しがあれば、渡し守の仕事の形が変わることにも、前向きに向き合える" },
-    ],
-    awareness: "unaware",
-    reach_when: "村の担い手が減っていることと、橋の場所へのこだわりがその不安の表れであることを言い当てる",
-  },
   briefing: [
     { label: "計画", text: "県の補助で、来年度中に川へ橋を 1 本かける" },
     { label: "候補地", text: "東の浅瀬と、村の中心に近い西の渡し場の 2 か所" },

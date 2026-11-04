@@ -162,10 +162,6 @@ details.params summary { cursor: pointer; color: var(--accent-ink); font-size: 1
 .concern.resolved { border-color: rgba(29,143,90,.45); }
 .concern .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
 .concern.missed { border-style: dashed; opacity: .85; }
-.concern.root { border-color: var(--accent); }
-.concern.root.hidden:not(.missed) { font-size: 12px; }
-.concern.root.reached { border-width: 2px; background: color-mix(in srgb, var(--accent) 14%, var(--panel2)); }
-.concern.root.reached .st { color: var(--accent-ink); }
 
 /* ダイアログの後ろは、ゲーム画面がうっすら見える程度にぼかして、ほんの少しだけ暗くする */
 .overlay { position: fixed; inset: 0; background: rgba(40,46,70,.18); backdrop-filter: blur(3px); display: flex; align-items: center; justify-content: center; padding: 16px; z-index: 10; }

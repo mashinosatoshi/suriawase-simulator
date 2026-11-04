@@ -72,7 +72,7 @@ async function playGame(index: number, o: Options, providers: Providers, keys: A
     if (/差し戻し/.test(message)) rejections.push({ turn: engine.publicState().turn, message });
   };
   const gm = new BuiltinGm(engine, () => providers.gm, keys, { provider: o.gm.provider, model: o.gm.model }, () => {}, log);
-  const record: GameRecord = { index, title: "(シナリオなし)", theme, style: style.label, turns: turnPlanText(plan), difficulty, scenario: null, transcript: [], ending: null, review: null, root: null, rejections, error: null, judge: null, judgeError: null };
+  const record: GameRecord = { index, title: "(シナリオなし)", theme, style: style.label, turns: turnPlanText(plan), difficulty, scenario: null, transcript: [], ending: null, review: null, rejections, error: null, judge: null, judgeError: null };
   const step = (text: string) => process.stdout.write(`\r  ${text}`.padEnd(60));
 
   engine.requestNewGame("", difficulty, params, theme);
@@ -121,7 +121,6 @@ async function playGame(index: number, o: Options, providers: Providers, keys: A
   record.transcript = transcriptOf(state.recent_log, names);
   record.ending = state.ending;
   record.review = state.review;
-  record.root = engine.publicState().root;
   if (!record.error && engine.phase === "ended" && !state.review) record.error = gm.status().error ?? "振り返りが届きませんでした";
 
   if (!providers.judge || !o.judge) record.judgeError = "審査待ち (Claude Code のサブエージェントが審査する)";
@@ -131,7 +130,7 @@ async function playGame(index: number, o: Options, providers: Providers, keys: A
       const judgeProvider = providers.judge;
       const judgeModel = o.judge.model;
       const sc = state.scenario;
-      record.judge = await withRateWaits(() => judge(judgeProvider, judgeModel, sc, record.transcript, !!record.ending?.score.root.reached), step);
+      record.judge = await withRateWaits(() => judge(judgeProvider, judgeModel, sc, record.transcript), step);
     } catch (err) {
       record.judgeError = describeError(err);
     }
