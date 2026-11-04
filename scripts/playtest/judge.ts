@@ -16,8 +16,6 @@ export const CATEGORIES = [
   "その他",
 ] as const;
 export const SEVERITIES = ["軽微", "目立つ", "重大"] as const;
-/** 本質的な課題への到達の判定が妥当だったか */
-export const REACH_VERDICTS = ["届いた・妥当", "届いた・甘い", "届かなかった・妥当", "届かなかった・厳しすぎる", "言い当ての試みなし"] as const;
 
 const CATEGORY_HELP = `- 状況との食い違い: 前提情報・場面・それまでの会話と矛盾する。立場上ありえない言動
 - 人物像のぶれ: persona に合わない言動。理由のない急な態度の変化
@@ -45,26 +43,6 @@ export const reportSchema = z.object({
     )
     .max(30)
     .describe("不自然な箇所。無ければ空の配列。登場人物の台詞と地の文だけが対象 (プレイヤーの発言は対象外)"),
-  root_issue: z
-    .object({
-      depth: z
-        .number()
-        .int()
-        .min(1)
-        .max(5)
-        .describe("本質的な課題の作り込み。5 = つながる本音どうしを見比べると腑に落ちる、場面と人物に固有の深い課題 / 3 = それらしいが、やや一般的 / 1 = 表の本音の言い換えか、どんな話にも当てはまる一般論"),
-      cascade: z
-        .number()
-        .int()
-        .min(1)
-        .max(5)
-        .describe(
-          "芋づる式になっているか。5 = この課題が解消されたら、linked の本音の多くが自然に解消に向かうと納得でき、cascade の説明も具体的 / 3 = 一部しか納得できない / 1 = 本音を束ねているだけで、解消しても linked の本音は動かない (感情の名前だけ、表の本音の言い換えなど)",
-        ),
-      reach: z.enum(REACH_VERDICTS).describe("到達の判定は妥当だったか。届いたなら、プレイヤーの仮説が本当に到達の条件を言い当てていたか。届かなかったなら、言い当てていたのに認められなかった (厳しすぎる) か"),
-      comment: z.string().min(1).max(400).describe("理由。届いたターンの owner の反応 (腑に落ちた反応になっていたか) にも触れる"),
-    })
-    .describe("本質的な課題 (表の本音の奥にある、本人も言葉にできていない根っこ) の評価"),
 });
 export type JudgeReport = z.infer<typeof reportSchema>;
 
@@ -85,14 +63,7 @@ ${CATEGORY_HELP}
 - 登場人物の設定 (persona・speech・sample_lines)、前提情報、その時点までの会話を踏まえて判断する。
 - 本音 (concerns) は、登場人物が隠している事情。聞かれる前に話していないか、話すきっかけが自然かも見る。
 - 好みの問題や、言い回しの小さな揺れは挙げない。読み手が「この人がこの場面でこう言うのはおかしい」と感じる箇所だけを挙げる。
-- quote は台詞から一字一句そのまま抜き出す。
-
-## 本質的な課題 (root_issue) の評価
-シナリオには、表の本音 (concerns) の奥に、本質的な課題が 1 つある。いくつもの本音 (linked) の根っこにあり、本人も言葉にできていない。プレイヤーが本音どうしをつなげて仮説として言い当てたときだけ「届いた」になる。
-- depth: 本質的な課題として成り立っているか。linked の本音を並べると「根っこはこれか」と腑に落ちるか。表の本音の言い換えや、どんな話にも当てはまる一般論になっていないか。
-- cascade: 本質的な課題は、解消すると形式的な課題 (表の本音) の多くが芋づる式に解消に向かう、根っこの原因でなければならない。root_issue.cascade の「この課題が解消されたら、その本音はどう解消に向かうか」が、本音ごとに納得できるか。linked の本音が、本当にこの課題から生まれたものに見えるか。「不安」「孤独」のような感情の名前だけで、手当てできる原因になっていないものは低くつける。
-- reach: 到達の判定が妥当だったか。届いたなら、そのターンのプレイヤーの発言が到達の条件 (reach_when) を本当に言い当てていたか (一般論や要素の欠けた仮説で届いていれば「甘い」)。届かなかったなら、言い当てていたのに認められなかったか (「厳しすぎる」)。プレイヤーが言い当てを試みていなければ「言い当ての試みなし」。
-- 登場人物が、届く前に本質的な課題を自分から話していたら、issues に「聞かれていないことを話す」として挙げる。`;
+- quote は台詞から一字一句そのまま抜き出す。`;
 
 const SYSTEM = `${JUDGE_GUIDE}\n- 結果は report ツールで 1 回だけ提出する。`;
 
@@ -115,34 +86,23 @@ export function transcriptOf(log: LogLine[], names: Map<string, string>): Transc
 
 export const formatTranscript = (lines: TranscriptLine[]) => lines.map((l) => `[${l.turn}] ${l.from === "player" ? "プレイヤー" : l.speaker}: ${l.text}`).join("\n");
 
-/** 審査役に渡す材料: 登場人物の設定・隠れた本音・本質的な課題 (届いたか) と、ターン番号つきの会話 */
-export function material(sc: Scenario, lines: TranscriptLine[], rootReached: boolean) {
-  const nameOf = (id: string) => sc.characters.find((x) => x.id === id)?.name ?? id;
-  const r = sc.root_issue;
+/** 審査役に渡す材料: 登場人物の設定・隠れた本音と、ターン番号つきの会話 */
+export function material(sc: Scenario, lines: TranscriptLine[]) {
   const setup = {
     title: sc.title,
     premise: sc.premise,
     player_role: sc.player_role,
     briefing: sc.briefing,
     characters: sc.characters.map((c) => ({ name: c.name, role: c.role, persona: c.persona, speech: c.speech, sample_lines: c.sample_lines })),
-    concerns: sc.concerns.map((c) => ({ owner: nameOf(c.owner), text: c.text, reveal_hint: c.reveal_hint })),
-    root_issue: {
-      owner: nameOf(r.owner),
-      text: r.text,
-      linked: r.linked.map((id) => sc.concerns.find((c) => c.id === id)?.text ?? id),
-      cascade: r.cascade.map((c) => ({ concern: sc.concerns.find((k) => k.id === c.id)?.text ?? c.id, how: c.how })),
-      awareness: r.awareness,
-      reach_when: r.reach_when,
-      reached: rootReached,
-    },
+    concerns: sc.concerns.map((c) => ({ owner: sc.characters.find((x) => x.id === c.owner)?.name ?? c.owner, text: c.text, reveal_hint: c.reveal_hint })),
   };
   return `## 設定\n${JSON.stringify(setup, null, 1)}\n\n## 会話\n${formatTranscript(lines)}`;
 }
 
 /** 審査する。形が正しくなければ理由を返して出し直させる (最大 3 回) */
-export async function judge(provider: LlmProvider, model: string, sc: Scenario, lines: TranscriptLine[], rootReached: boolean): Promise<JudgeReport> {
+export async function judge(provider: LlmProvider, model: string, sc: Scenario, lines: TranscriptLine[]): Promise<JudgeReport> {
   const session: ChatSession = provider.newSession({ system: SYSTEM, tools: [REPORT], model });
-  let input: Parameters<ChatSession["next"]>[0] = { text: material(sc, lines, rootReached) };
+  let input: Parameters<ChatSession["next"]>[0] = { text: material(sc, lines) };
   let problem = "";
   for (let attempt = 0; attempt < 3; attempt++) {
     const turn = await session.next(input);

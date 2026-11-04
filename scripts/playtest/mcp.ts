@@ -18,7 +18,7 @@ import { z } from "zod";
 import { STATUS_LABELS, type PublicState } from "../../src/shared.js";
 import { turnPlan, turnPlanText } from "./config.js";
 import { formatTranscript, JUDGE_GUIDE, material, reportSchema, transcriptOf, type JudgeReport } from "./judge.js";
-import { PLAYER_STYLES, rootStatusText } from "./player.js";
+import { PLAYER_STYLES } from "./player.js";
 import type { Usage } from "./providers.js";
 import { writeResults, type GameRecord, type Rejection } from "./report.js";
 
@@ -98,7 +98,6 @@ function view(s: PublicState, maxTurns: number) {
     sc.characters.map((c) => `${c.name} ${c.mood.emoji} ${c.mood.label}`).join(" / "),
     "## 見えてきた相手の本音 (懸念ボード)",
     ...(s.concerns.length ? s.concerns.map((c) => `- [${STATUS_LABELS[c.status]}] ${c.text}`) : ["- (まだ何も見えていない)"]),
-    ...(rootStatusText(s.root) ? [rootStatusText(s.root)] : []),
     left > 1
       ? `## 残り ${left} 回発言できます。`
       : Number.isFinite(maxTurns)
@@ -188,13 +187,13 @@ async function main() {
       if (existsSync(apiRecord)) {
         const g = readJson<GameRecord>(apiRecord);
         if (!g.scenario) throw new Error("このゲームはシナリオができる前に止まったので、審査するものがありません");
-        body = ["設定はすべて下にある。MCP のツールは呼ばない。", "", material(g.scenario, g.transcript, !!g.ending?.score.root.reached)];
+        body = ["設定はすべて下にある。MCP のツールは呼ばない。", "", material(g.scenario, g.transcript)];
       } else {
         const s = readJson<PublicState>(join(dir, `game-${pad(Number(n))}-public.json`));
         const names = new Map((s.scenario?.characters ?? []).map((c) => [c.id, c.name]));
         body = [
           "## 登場人物の設定と隠れた本音",
-          "MCP のツール mcp__suriawase-simulator__get_state を 1 回呼び、結果の scenario (characters の persona・speech・sample_lines、briefing、concerns、root_issue) と root (本質的な課題に届いたか・何ターン目か) を見る。ほかの MCP のツールは呼ばない。",
+          "MCP のツール mcp__suriawase-simulator__get_state を 1 回呼び、結果の scenario (characters の persona・speech・sample_lines、briefing、concerns) を見る。ほかの MCP のツールは呼ばない。",
           "",
           `## 会話 (題名: ${s.scenario?.title ?? "?"})`,
           formatTranscript(transcriptOf(s.log, names)),
@@ -269,7 +268,6 @@ async function main() {
           transcript: transcriptOf(s.log, names),
           ending: s.ending,
           review: s.review,
-          root: s.root,
           rejections: meta.rejections ?? [],
           error: meta.error ?? (s.phase !== "ended" ? "最後まで進みませんでした" : null),
           ...judgeOf(n),
