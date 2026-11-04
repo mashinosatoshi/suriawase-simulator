@@ -487,6 +487,8 @@ function aiPicker(s: PublicState, onReady: (ready: boolean) => void) {
 }
 
 let setupKey = "";
+/** 紹介画面 (最初に開いたときの、題名・概要・リンク) を過ぎたか。過ぎたら、もう出さない (ブラウザの保存領域は使わない) */
+let introDone = false;
 /** 「AI の設定」画面を開いている (内蔵 GM で AI がまだ確定していなければ、いつもこちらから) */
 let aiSetupOpen = false;
 /** 最後に選んだ難易度 (次の新しいシナリオでも同じものを選んでおく) */
@@ -507,10 +509,14 @@ function renderSetup(s: PublicState) {
   const show = s.phase === "setup" || composeNew || (aiStep && aiSetupOpen);
   el.hidden = !show;
   const generating = s.phase === "setup" && s.generating && !composeNew;
+  // 最初に開いたとき (シナリオが無く、何も始めていない) は、いきなり設定ではなく、紹介画面を出す
+  const intro = !introDone && s.phase === "setup" && !s.scenario && !s.generating && !composeNew && !aiSetupOpen;
   // 入力中のフォームを、無関係な状態更新で作り直さない
   const key = !show
     ? "hidden"
-    : generating
+    : intro
+      ? `intro:${s.ai.mode}`
+      : generating
       ? `generating:${s.ai.mode}:${s.ai.connected}:${s.ai.error ?? ""}:${s.ai.notice ?? ""}`
       : aiStep
         ? `ai:${!!s.scenario}:${composeNew}`
@@ -518,6 +524,10 @@ function renderSetup(s: PublicState) {
   if (key === setupKey) return;
   setupKey = key;
   if (!show) return;
+  if (intro) {
+    el.replaceChildren(introDialog(s));
+    return;
+  }
   if (generating) {
     el.replaceChildren(
       h(
@@ -540,6 +550,51 @@ function renderSetup(s: PublicState) {
   }
   el.replaceChildren(aiStep ? aiSetupDialog(s) : storyDialog(s));
   if (!aiStep) el.querySelector("textarea")?.focus();
+}
+
+const REPO_URL = "https://github.com/mashinosatoshi/suriawase-simulator";
+
+/**
+ * 紹介画面: 題名・概要・遊び方・リンク。「ゲームを始める」を押すと、(1) AI の設定 → (2) 話題と難易度 に進む。
+ * MCP では AI は Claude Code なので、遊び方から AI を選ぶ手順は除く
+ */
+function introDialog(s: PublicState) {
+  const link = (href: string, text: string) => h("a", { href, target: "_blank", rel: "noopener noreferrer" }, text);
+  const builtin = s.ai.mode === "builtin";
+  const steps = [
+    ...(builtin ? ["使う AI (Claude・GPT・Gemini) を選び、API キーを入力します。"] : []),
+    "どんな話にするか (空欄ならおまかせ) と、難易度を選びます。",
+    "相手と会話して、本音を聞き出し、すり合わせます。",
+  ];
+  return h(
+    "div",
+    { class: "dialog landing" },
+    h("div", { class: "big" }, "🤝"),
+    h("h1", {}, "すり合わせシミュレーター"),
+    h("p", { class: "lead" }, "隠れた課題を聞き出して合意形成する会話ゲームです。"),
+    h(
+      "ul",
+      { class: "points" },
+      h("li", {}, "シナリオと相手役は、AI がその場で作るので毎回変わります。"),
+      h("li", {}, "自由に会話できます。信頼を築くと、少しずつ本音を話してくれます。"),
+      h("li", {}, "具体的な解決案を出して、お互いが納得できる形に落とし込みます。"),
+      h("li", {}, "終了時にどれだけ上手に合意形成できたかがスコア化されます。"),
+    ),
+    h("div", { class: "howto" }, h("h2", {}, "遊び方"), h("ol", { class: "steps" }, ...steps.map((t) => h("li", {}, t)))),
+    builtin && h("p", { class: "muted text-sm" }, "API キーはあなたのブラウザの中だけで使われ、このサイトのサーバーには絶対に送られませんが、話題や会話は選んだ AI の会社に送られますので、個人情報や機密情報は絶対に入力しないでください。"),
+    h("button", { class: "primary start", onclick: () => ((introDone = true), render()) }, "ゲームを始める"),
+    h(
+      "p",
+      { class: "links text-sm" },
+      link(REPO_URL, "ソースコード (GitHub)"),
+      " ・ ",
+      link("/privacy.html", "プライバシーポリシー"),
+      " ・ ",
+      link("/terms.html", "利用規約"),
+      " ・ ",
+      link(`${REPO_URL}/issues`, "お問い合わせ"),
+    ),
+  );
 }
 
 /** (1) AI の設定。確定すると (2) に進む */
