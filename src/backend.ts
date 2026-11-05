@@ -5,13 +5,16 @@ import { Engine } from "./engine.js";
 import { BuiltinGm } from "./gm.js";
 import { CATALOG, checkKeyFormat, createProvider, describeError, isAuthError, PROVIDER_IDS, verifyKey, ApiKeys, type LlmProvider, type ProviderId } from "./llm/index.js";
 import { parseNewGame } from "./requests.js";
+import type { ScenarioFile } from "./scenario-file.js";
 import type { PublicState } from "./shared.js";
 
-export type Action = "act" | "defer" | "new" | "replay" | "ai/retry" | "ai/select" | "ai/key" | "ai/forget";
+export type Action = "act" | "defer" | "new" | "replay" | "import" | "ai/retry" | "ai/select" | "ai/key" | "ai/forget";
 
 export interface Backend {
   /** 操作を送る。うまくいかなければ、画面に出す理由を返す */
   send(action: Action, body?: Record<string, unknown>): Promise<string | null>;
+  /** いまのシナリオ (隠し情報を含む) を、ファイルにできる形で受け取る。プレイの結果は含まない */
+  exportScenario(): Promise<{ file: ScenarioFile } | { error: string }>;
   /** 状態が変わるたびに onState を呼ぶ */
   connect(onState: (s: PublicState) => void): void;
 }
@@ -68,6 +71,8 @@ export function createLocalBackend(deps: LocalDeps = defaultDeps): Backend {
       return null;
     },
     replay: () => engine.replay(),
+    // 書き出されたシナリオで遊ぶ。シナリオを作る手間は要らないが、遊ぶには AI が要るので、「新しいゲーム」と同じく先に AI を確定させる
+    import: (b) => (gm.status().current ? engine.importScenario(b.file) : "AI が選ばれていません。先に「AI の設定」で AI を確定してください"),
     "ai/retry": () => (gm.retry(), null),
     "ai/select": (b) => {
       const provider = providerOf(b);
@@ -93,6 +98,10 @@ export function createLocalBackend(deps: LocalDeps = defaultDeps): Backend {
       const handler = handlers[action];
       return handler ? handler(body) : "不明な操作です";
     },
+    async exportScenario() {
+      const file = engine.exportScenario();
+      return file ? { file } : { error: "書き出せるシナリオがありません (シナリオを作っている最中か、まだ始めていません)" };
+    },
     connect(onState) {
       listener = onState;
       push();
@@ -108,6 +117,12 @@ export function createRemoteBackend(onWrongServer: () => void): Backend {
       if (!res) return "ゲームのサーバーに接続できませんでした";
       if (res.ok) return null;
       return ((await res.json().catch(() => ({}))) as { error?: string }).error ?? "操作に失敗しました";
+    },
+    async exportScenario() {
+      const res = await fetch("/api/export", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }).catch(() => null);
+      if (!res) return { error: "ゲームのサーバーに接続できませんでした" };
+      const data = (await res.json().catch(() => ({}))) as { error?: string } & Partial<ScenarioFile>;
+      return res.ok ? { file: data as ScenarioFile } : { error: data.error ?? "書き出せませんでした" };
     },
     connect(onState) {
       new EventSource("/api/stream").onmessage = (e) => {

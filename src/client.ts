@@ -1,5 +1,6 @@
 import { config as zodConfig } from "zod";
 import { createLocalBackend, createRemoteBackend, type Action, type Backend } from "./backend.js";
+import { encryptScenarioFile, MAX_KEY_CHARS, normalizeKey, openScenarioFile, ScenarioFileError, ScenarioKeyRequired } from "./scenario-crypto.js";
 import {
   DEFAULT_DIFFICULTY,
   DIFFICULTIES,
@@ -271,6 +272,7 @@ $("replay").addEventListener("click", () => {
   post("replay");
 });
 $("aichange").addEventListener("click", openAiSetup);
+$("exportscenario").addEventListener("click", () => void saveScenario());
 $("newgame").addEventListener("click", () => {
   if (state?.scenario && state.phase !== "ended" && !confirm("いまの対話を捨てて、新しいシナリオを作りますか？")) return;
   composeNew = true;
@@ -640,6 +642,7 @@ function storyDialog(s: PublicState) {
       level.note,
       params.el,
     ),
+    importRow(),
     s.ai.mode === "builtin" && h("div", { class: "aisum" }, h("span", {}, `AI: ${s.ai.label}`), h("button", { type: "button", onclick: () => ((aiSetupOpen = true), render()) }, "変更")),
     aiHint(s),
     h(
@@ -797,6 +800,178 @@ function copyExport(s: PublicState) {
   navigator.clipboard.writeText(exportMarkdown(s)).then(ok, ng);
 }
 
+/** ファイル名に付ける日時 (この端末の時刻。例: 20261105-103015) */
+function stamp(d = new Date()) {
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+}
+
+/**
+ * 書き出すときの、暗号化のキーの入力。ふつうは空欄のまま「保存」(アプリ標準のキー)。必要なときだけ、自分で決めたキーを入れる。
+ * 戻り値: null = やめた / "" = 標準のキー / それ以外 = 自分で決めたキー
+ */
+function askExportKey(): Promise<string | null> {
+  const el = $("keyask");
+  return new Promise((resolve) => {
+    const input = h("input", { type: "password", id: "exportkey", autocomplete: "new-password", spellcheck: "false", maxlength: MAX_KEY_CHARS, placeholder: "空欄なら、標準のキー" });
+    const show = h("input", { type: "checkbox" });
+    show.addEventListener("change", () => (input.type = show.checked ? "text" : "password"));
+    const finish = (v: string | null) => {
+      document.removeEventListener("keydown", onKey);
+      el.hidden = true;
+      el.replaceChildren();
+      resolve(v);
+    };
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && finish(null);
+    document.addEventListener("keydown", onKey);
+    el.replaceChildren(
+      h(
+        "form",
+        { class: "dialog", onsubmit: (e: Event) => (e.preventDefault(), finish(input.value)) },
+        h("h2", {}, "シナリオを書き出す"),
+        h("p", {}, "シナリオのファイルは暗号化されます。ふだんはそのまま「保存」で、このアプリ標準のキーを使います。ほかの人に渡すだけなら、これで足ります。"),
+        h(
+          "div",
+          { class: "keyfield" },
+          h("label", { for: "exportkey" }, h("strong", { class: "text-sm" }, "自分で決めたキーを使う (任意)")),
+          input,
+          h("label", { class: "showkey" }, show, "キーを表示する"),
+        ),
+        h(
+          "p",
+          { class: "muted text-sm" },
+          "キーを決めると、そのキーを知っている人だけが読み込めます (読み込むときに、同じキーを聞かれます)。キーはファイルに残らないので、忘れると読み込めません。ほかのサービスのパスワードは使わないでください。",
+        ),
+        h(
+          "div",
+          { class: "actions" },
+          h("button", { type: "button", onclick: () => finish(null) }, "やめる"),
+          h("button", { type: "submit", class: "primary" }, "保存"),
+        ),
+      ),
+    );
+    el.hidden = false;
+    input.focus();
+  });
+}
+
+/**
+ * 「シナリオを書き出す」: いまのシナリオを、暗号化した JSON ファイルにして保存する。別の人が、読み込んで同じシナリオで遊べる。
+ * 会話・結果は含まない。隠れた本音や解消条件も入るが、暗号化されているので、遊んでいる最中に書き出しても、中身は見えない。
+ * 暗号化のキーは、ふつうはアプリ標準のもの。書き出すときに、自分で決めたキーに変えられる。
+ * ファイル名には、書き出した日時が付く
+ */
+let saving = false;
+async function saveScenario() {
+  if (saving) return; // キーの入力を待っている間の、二重の起動
+  saving = true;
+  try {
+    await saveScenarioFile();
+  } finally {
+    saving = false;
+  }
+}
+async function saveScenarioFile() {
+  const r = await backend.exportScenario();
+  if ("error" in r) return toast(r.error);
+  const key = await askExportKey();
+  if (key === null) return;
+  let encrypted;
+  try {
+    encrypted = await encryptScenarioFile(r.file, key);
+  } catch (err) {
+    return toast(err instanceof ScenarioFileError ? err.message : "シナリオを暗号化できませんでした");
+  }
+  const safe = r.file.scenario.title.replace(/[\\/:*?"<>|\s]+/g, "_").slice(0, 40);
+  const url = URL.createObjectURL(new Blob([JSON.stringify(encrypted)], { type: "application/json" }));
+  const a = h("a", { href: url, download: `すり合わせ-${safe}-${stamp()}.json` });
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  toast(normalizeKey(key) ? "シナリオを、決めたキーで暗号化して保存しました。読み込む人にキーを伝えてください" : "シナリオを暗号化して保存しました");
+}
+
+/** 書き出したシナリオのファイルを読み込んで、そのシナリオで遊ぶ。読み込めたら、そのまま始まる (難易度は、ファイルに書かれていたもの) */
+function importRow() {
+  const err = h("p", { class: "warn importerr" });
+  err.hidden = true;
+  const show = (m: string) => {
+    err.textContent = m;
+    err.hidden = !m;
+  };
+  const input = h("input", { type: "file", accept: ".json,application/json", hidden: true, "aria-label": "シナリオのファイル" });
+
+  // キーを決めて暗号化されたファイルは、キーを聞く。聞いている間は、そのファイルの中身をここに持っておく
+  let locked: unknown = null;
+  const keyInput = h("input", { type: "password", autocomplete: "off", spellcheck: "false", maxlength: MAX_KEY_CHARS, placeholder: "暗号化のキー", "aria-label": "暗号化のキー" });
+  const keyButton = h("button", { type: "button", class: "primary" }, "開く");
+  const keyRow = h("div", { class: "importkey" }, keyInput, keyButton);
+  keyRow.hidden = true;
+  const closeKeyRow = () => {
+    locked = null;
+    keyInput.value = "";
+    keyRow.hidden = true;
+  };
+
+  /** 復号して、ゲームの本体に渡す。暗号化されたファイルは復号し (暗号化していない JSON は、そのまま)、中身の検査は、ゲームの本体がする */
+  const load = async (data: unknown, key?: string) => {
+    try {
+      data = await openScenarioFile(data, key);
+    } catch (e) {
+      if (e instanceof ScenarioKeyRequired) {
+        locked = data;
+        keyRow.hidden = false;
+        keyInput.focus();
+      } else if (locked) keyInput.select(); // キーが違った: もう一度入力できるように、欄は残す
+      return show(e instanceof ScenarioFileError ? e.message : "シナリオのファイルを開けませんでした");
+    }
+    closeKeyRow();
+    const error = await backend.send("import", { file: data });
+    if (error) return show(error);
+    composeNew = false;
+    render();
+  };
+
+  input.addEventListener("change", async () => {
+    const file = input.files?.[0];
+    input.value = "";
+    if (!file) return;
+    show("");
+    closeKeyRow();
+    if (file.size > 1024 * 1024) return show("ファイルが大きすぎます");
+    let data: unknown;
+    try {
+      data = JSON.parse(await file.text());
+    } catch {
+      return show("JSON として読み込めませんでした。書き出したシナリオのファイルを選んでください");
+    }
+    await load(data);
+  });
+  const submitKey = () => {
+    if (!locked) return;
+    if (!keyInput.value.trim()) return show("キーを入力してください");
+    show("");
+    void load(locked, keyInput.value);
+  };
+  keyButton.addEventListener("click", submitKey);
+  keyInput.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" || e.isComposing) return; // 日本語の変換の確定の Enter では送らない
+    e.preventDefault();
+    submitKey();
+  });
+  return h(
+    "div",
+    { class: "importrow" },
+    h("span", {}, "書き出したシナリオで遊ぶ"),
+    h("button", { type: "button", onclick: () => input.click() }, "シナリオを読み込む…"),
+    input,
+    h("small", { class: "muted" }, "ほかの人が遊んだシナリオと同じ内容で始まります。難易度も、ファイルに書かれたものになります。書き出した人がキーを決めていたときは、そのキーを聞かれます。知らない人のファイルは、内容を確かめてから読み込んでください。"),
+    keyRow,
+    err,
+  );
+}
+
 const sectionTitle = (t: string) => h("h2", { class: "section-title" }, t);
 
 /** AI が書いた振り返り。書き終わるまでは待ち表示 */
@@ -861,6 +1036,8 @@ function renderEnding(s: PublicState) {
   const el = $("ending");
   const e = s.ending;
   $("showending").hidden = !e || !endingDismissed;
+  // シナリオは、遊び始めてから、終わった後まで書き出せる (作っている最中・遊ぶ前は、まだ無い)
+  $("exportscenario").hidden = !s.scenario;
   if (!e || endingDismissed) {
     // 会話を読み返している間に振り返りが届いたら知らせる
     if (e && s.review && !reviewToasted) toast("振り返りができました (右上の「結果・振り返り」から見られます)");
@@ -899,6 +1076,7 @@ function renderEnding(s: PublicState) {
           "div",
           { class: "actions" },
           h("button", { onclick: () => copyExport(state?.ending ? state : cur) }, "会話を書き出す"),
+          h("button", { onclick: () => void saveScenario() }, "シナリオを書き出す"),
           h("button", { onclick: () => ((endingDismissed = true), render()) }, "会話を読み返す"),
           h("button", { onclick: () => ((endingDismissed = true), post("replay")) }, "同じシナリオでもう一度"),
           h("button", { class: "primary", onclick: () => ((endingDismissed = true), (composeNew = true), render()) }, "新しいシナリオ"),
@@ -990,7 +1168,7 @@ function render() {
   renderEnding(s);
   // 相手が返したら、クリックしなくてもそのまま打ち始められるようにする (考えている間は入力欄を無効にするので、カーソルが外れている)。
   // 画面のキーボードが届いたばかりの返答を隠す端末と、開始・結果の画面を開いているときは動かさない
-  if (turnStarted && !TOUCH && $("setup").hidden && $("ending").hidden) $("text").focus({ preventScroll: true });
+  if (turnStarted && !TOUCH && $("setup").hidden && $("ending").hidden && $("keyask").hidden) $("text").focus({ preventScroll: true });
 }
 
 /** MCP 版で、別のゲームのサーバーにつながってしまった場合 (同じポートで別のプログラムが動いているなど) */

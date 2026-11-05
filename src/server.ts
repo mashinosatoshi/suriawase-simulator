@@ -61,14 +61,19 @@ const MIME: Record<string, string> = {
 };
 
 const MAX_BODY = 16 * 1024;
-async function readBody(req: IncomingMessage) {
-  let s = "";
+/** シナリオのファイルを読み込むときだけ、大きな本文を受け付ける */
+const MAX_IMPORT_BODY = 1024 * 1024;
+async function readBody(req: IncomingMessage, max = MAX_BODY) {
+  // 日本語は複数のバイトで 1 文字になるので、受け取ったかたまりを 1 つにしてから文字に直す (かたまりの境目で文字が壊れないように)
+  const chunks: Buffer[] = [];
+  let size = 0;
   for await (const chunk of req) {
-    s += chunk;
-    if (s.length > MAX_BODY) return {};
+    chunks.push(chunk as Buffer);
+    size += (chunk as Buffer).length;
+    if (size > max) return {};
   }
   try {
-    return JSON.parse(s || "{}") as Record<string, unknown>;
+    return JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}") as Record<string, unknown>;
   } catch {
     return {};
   }
@@ -96,7 +101,7 @@ async function handleApi(e: Engine, req: IncomingMessage, res: ServerResponse, p
     return;
   }
   if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
-  const body = await readBody(req);
+  const body = await readBody(req, path === "/api/import" ? MAX_IMPORT_BODY : MAX_BODY);
   let error: string | null = null;
   switch (path) {
     case "/api/act":
@@ -114,6 +119,14 @@ async function handleApi(e: Engine, req: IncomingMessage, res: ServerResponse, p
     case "/api/replay":
       error = e.replay();
       break;
+    case "/api/import":
+      error = e.importScenario(body.file);
+      break;
+    case "/api/export": {
+      // 隠し情報を含むので、画面 (同じサーバーから開いたページ) だけが受け取る。ほかのページ・ホスト名からの操作は isLocalRequest が弾く
+      const file = e.exportScenario();
+      return file ? json(res, 200, file) : json(res, 409, { error: "書き出せるシナリオがありません (シナリオを作っている最中か、まだ始めていません)" });
+    }
     default:
       return json(res, 404, { error: "not found" });
   }
