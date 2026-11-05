@@ -18,6 +18,7 @@
   <button type="button" id="aichange" class="small" hidden>AI を変更</button>
   <span class="spacer"></span>
   <button id="showending" hidden>結果・振り返り</button>
+  <button type="button" id="exportscenario" hidden title="いまのシナリオを、暗号化したファイルに保存します。ほかの人が読み込んで、同じシナリオで遊べます (隠れた本音も入っていますが、暗号化されているので、遊んでいる最中に書き出しても、中身は見えません。暗号化のキーは、書き出すときに変えられます)">シナリオを書き出す</button>
   <button id="replay" disabled>最初から</button>
   <button id="newgame">新しいシナリオ</button>
 </header>
@@ -60,6 +61,7 @@
 
 <div id="setup" class="overlay" hidden></div>
 <div id="ending" class="overlay" hidden></div>
+<div id="keyask" class="overlay" hidden></div>
 <div id="toast" hidden></div>
 <script src="/client.js"></script>
 </body>

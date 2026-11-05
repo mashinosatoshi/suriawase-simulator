@@ -35,6 +35,7 @@ import {
   type ReplyInput,
   type Scenario,
 } from "./scenario.js";
+import { describeFileErrors, parseScenarioFile, SCENARIO_FILE_FORMAT, SCENARIO_FILE_VERSION, type ScenarioFile } from "./scenario-file.js";
 import { pickTheme, type Theme } from "./themes.js";
 
 const MAX_LOG = 400;
@@ -323,6 +324,31 @@ export class Engine {
   /** 同じシナリオで最初から。AI の手は要らない (opening はシナリオに入っている) */
   replay(): string | null {
     if (!this.scenario) return "シナリオがまだありません";
+    this.begin();
+    this.changed();
+    return null;
+  }
+
+  /**
+   * いまのシナリオ (隠れた本音・解消条件などの隠し情報を含む) を、別の人が遊べるファイルの形にする。
+   * 遊び始めてから、終わった後まで、いつでも書き出せる。会話・信頼度・本音の進み具合・結果・スコアは含めない (プレイの結果とは切り離す)。
+   * シナリオがまだ無い (作っている最中・遊ぶ前) なら null
+   */
+  exportScenario(): ScenarioFile | null {
+    if (!this.scenario) return null;
+    return { format: SCENARIO_FILE_FORMAT, version: SCENARIO_FILE_VERSION, difficulty: this.difficulty, params: { ...this.params }, scenario: structuredClone(this.scenario) };
+  }
+
+  /**
+   * 書き出されたシナリオを読み込んで、最初から遊ぶ (難易度とパラメータも、ファイルに書かれていたもの)。AI の手は要らない。
+   * ファイルは知らない人が作ったものかもしれないので、AI が作ったシナリオと同じ検査に通す。通らなければ何も変えずに、画面に出す理由を返す
+   */
+  importScenario(input: unknown): string | null {
+    const r = parseScenarioFile(input);
+    if (!r.ok) return describeFileErrors(r.errors);
+    this.difficulty = r.file.difficulty;
+    this.params = { ...r.file.params };
+    this.scenario = r.file.scenario;
     this.begin();
     this.changed();
     return null;

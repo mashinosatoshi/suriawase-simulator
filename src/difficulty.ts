@@ -165,7 +165,32 @@ export function parseDifficulty(level: unknown, params: unknown): { level: Diffi
     if (typeof v !== "number" || !Number.isInteger(v) || v < spec.min || v > spec.max) return { error: `「${spec.label}」は ${spec.min}〜${spec.max} の整数にしてください` };
     out[key] = v;
   }
-  if (out.openAtStart > out.concerns) return { error: "「最初から話せる本音の数」は「懸念の数」以下にしてください" };
-  if (out.nonNegotiable > out.concerns) return { error: "「譲れない本音の数」は「懸念の数」以下にしてください" };
+  const bad = crossFieldError(out);
+  if (bad) return { error: bad };
   return { level: d, params: out };
+}
+
+/** パラメータどうしの関係 (数の上限) の誤り。無ければ null */
+function crossFieldError(p: DifficultyParams): string | null {
+  if (p.openAtStart > p.concerns) return "「最初から話せる本音の数」は「懸念の数」以下にしてください";
+  if (p.nonNegotiable > p.concerns) return "「譲れない本音の数」は「懸念の数」以下にしてください";
+  return null;
+}
+
+/**
+ * シナリオのファイルに入っていた難易度とパラメータを確かめる。parseDifficulty と違い、ランダムでも値を選び直さず、すべての項目を必須にする
+ * (シナリオは、その値に合わせて作られているため)
+ */
+export function parseExactDifficulty(level: unknown, params: unknown): { level: Difficulty; params: DifficultyParams } | { error: string } {
+  if (typeof level !== "string" || !DIFFICULTIES.includes(level as Difficulty)) return { error: "difficulty が不明です" };
+  if (!params || typeof params !== "object" || Array.isArray(params)) return { error: "params (パラメータ) がありません" };
+  const input = params as Record<string, unknown>;
+  const out = {} as DifficultyParams;
+  for (const [key, spec] of Object.entries(PARAM_SPECS) as Array<[keyof DifficultyParams, (typeof PARAM_SPECS)[keyof DifficultyParams]]>) {
+    const v = input[key];
+    if (typeof v !== "number" || !Number.isInteger(v) || v < spec.min || v > spec.max) return { error: `params.${key} (「${spec.label}」) は ${spec.min}〜${spec.max} の整数にしてください` };
+    out[key] = v;
+  }
+  const bad = crossFieldError(out);
+  return bad ? { error: bad } : { level: level as Difficulty, params: out };
 }

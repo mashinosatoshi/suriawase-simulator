@@ -526,3 +526,20 @@ test("自動で再試行を待つあいだに最初からやり直されたら�
   assert.equal(engine.phase, "player_turn");
   assert.equal(provider.sessions.length, 3);
 });
+
+test("読み込んだシナリオで遊ぶ: シナリオを作る呼び出しは要らず、最初の発言から AI が相手役を始める (全状態を渡して)", async () => {
+  const { engine, provider, gm } = setup([[() => reply(1)]]);
+  const maker = new Engine();
+  maker.requestNewGame("");
+  assert.ok(maker.startScenario(scenario).ok);
+  assert.equal(engine.importScenario(JSON.parse(JSON.stringify(maker.exportScenario()))), null);
+  await gm.tick();
+  assert.equal(provider.sessions.length, 0); // 読み込んだだけでは、AI を呼ばない
+  engine.act({ text: "こんにちは" });
+  await gm.tick();
+  assert.equal(engine.phase, "player_turn");
+  assert.equal(provider.sessions.length, 1);
+  assert.deepEqual(provider.sessions[0].options.tools.map((t) => t.name), ["reply"]);
+  assert.match(provider.sessions[0].inputs[0].text ?? "", /進行中のゲームです/); // 隠し情報つきの全状態を、最初に渡す
+  assert.match(provider.sessions[0].inputs[0].text ?? "", /resolved_when/);
+});

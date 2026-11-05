@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseDifficulty, probesNeeded, randomParams, revealDifficulty, trustGainRate } from "./difficulty.js";
+import { parseDifficulty, parseExactDifficulty, probesNeeded, randomParams, revealDifficulty, trustGainRate } from "./difficulty.js";
 import { Engine, stripSelfIntro, type Work } from "./engine.js";
 import { leaksSecret, replySchema, type ReplyInput, type Scenario } from "./scenario.js";
 import { discoverRate, resolveRate, scoreGame } from "./score.js";
@@ -1577,3 +1577,119 @@ test("しゃべりすぎの返答は差し戻す (台詞の長さ・数、しゃ
   assert.ok(reply(playing(), { lines: [line("mayor", "あ".repeat(120)), line("ferry", "い".repeat(120)), line("narrator", "日が傾いた。")] }).ok);
 });
 
+
+// ---- シナリオの書き出し・読み込み (リサイクル) ------------------------------------------------
+
+/** 渡した値をそのまま JSON を通して作り直す (ファイルに保存して読み込む流れ) */
+const viaFile = <T>(x: T) => JSON.parse(JSON.stringify(x)) as T;
+
+test("シナリオの書き出し: 遊び始めてから、終わった後まで、いつでもできる / 中身は同じで、プレイの結果は含まない", () => {
+  const e = new Engine();
+  assert.equal(e.exportScenario(), null); // まだ無い
+  e.requestNewGame("橋の話");
+  assert.equal(e.exportScenario(), null); // 作っている最中
+  assert.ok(e.startScenario(scenario()).ok);
+  const atStart = e.exportScenario()!;
+  assert.deepEqual(Object.keys(atStart).sort(), ["difficulty", "format", "params", "scenario", "version"]);
+  assert.deepEqual([atStart.format, atStart.version, atStart.difficulty], ["suriawase-simulator/scenario", 1, "normal"]);
+  assert.deepEqual(atStart.params, DIFFICULTY_PRESETS.normal);
+  assert.equal(atStart.scenario.title, "橋の場所");
+  assert.ok(JSON.stringify(atStart).includes("resolved_when")); // 隠し情報も入る (遊ぶ人はこれで遊ぶ)
+
+  // 遊んでいる最中も、終わった後も、同じ内容 (会話・信頼度・本音の進み具合・結果は入らない)
+  e.act({ text: "村の予算のことを聞かせてください" });
+  must(e.reply({ turn: 1, lines: [line()], ...up("mayor"), concern_updates: [{ id: "c1", to: "revealed", asked: "村の予算", hint: HINT.c1 }] }));
+  assert.deepEqual(viaFile(e.exportScenario()), viaFile(atStart));
+  e.act({ text: "今日はここまでにします" }, true);
+  must(e.reply({ turn: 2, lines: [line()], epilogue: "また話そう。" }));
+  assert.equal(e.phase, "ended");
+  const ended = JSON.stringify(e.exportScenario());
+  assert.equal(ended, JSON.stringify(atStart));
+  assert.ok(!/村の予算のことを聞かせて|また話そう|score|trust_end/.test(ended), "プレイの内容や結果が入っている");
+  // 書き出した後に内容を書き換えても、ゲームのシナリオは変わらない
+  const copy = e.exportScenario()!;
+  copy.scenario.title = "書き換えた";
+  assert.equal(e.exportScenario()!.scenario.title, "橋の場所");
+});
+
+test("シナリオの読み込み: 別の人が、同じシナリオを最初から遊べる (難易度・パラメータも、ファイルのとおり)", () => {
+  const picked: DifficultyParams = { ...DIFFICULTY_PRESETS.normal, concerns: 5, openAtStart: 2, nonNegotiable: 1, turnsPerConcern: 4 };
+  const a = new Engine();
+  a.requestNewGame("橋の話", "random", picked);
+  assert.ok(a.startScenario(scenario()).ok);
+  a.act({ text: "こんにちは" });
+  const file = viaFile(a.exportScenario()!);
+
+  const b = new Engine();
+  assert.equal(b.importScenario(file), null);
+  assert.equal(b.phase, "player_turn");
+  assert.deepEqual(b.publicState().scenario?.characters.map((c) => c.name), ["村長", "渡し守"]);
+  assert.equal(b.publicState().turn, 0); // a の会話は引き継がない
+  assert.equal(b.publicState().concerns.length, 0); // 本音は、また最初から見つけていく
+  assert.equal(b.publicState().log.at(0)?.text, "橋なら東の浅瀬がよかろう。それで決まりじゃ。"); // 冒頭の台詞
+  assert.equal(b.publicState().difficulty, "random");
+  assert.equal(b.publicState().scenario?.turnLimit, a.publicState().scenario?.turnLimit); // 同じパラメータなので、ターン数の上限も同じ
+  // 隠し情報は、ふだんどおり画面には送らない
+  assert.ok(!JSON.stringify(b.publicState()).includes("resolved_when"));
+  assert.equal(b.publicState().params, null); // ランダムのパラメータは、ゲーム中は見えない
+  // 最後まで遊ぶと、ランダムで選ばれたパラメータが、元のものと同じだと分かる
+  b.act({ text: "今日はここまでにします" }, true);
+  assert.equal(work(b).difficulty, "ランダム");
+  must(b.reply({ turn: 1, lines: [line()], epilogue: "また話そう。" }));
+  assert.deepEqual(b.publicState().params, picked);
+});
+
+test("シナリオの読み込み: 遊んでいる最中にも、別のシナリオに入れ替えられる (古い会話は捨てる)", () => {
+  const e = playing();
+  const epoch = e.publicState().epoch;
+  const other = scenario();
+  other.title = "別の橋";
+  assert.equal(e.importScenario({ format: "suriawase-simulator/scenario", version: 1, difficulty: "normal", params: DIFFICULTY_PRESETS.normal, scenario: other }), null);
+  assert.equal(e.publicState().scenario?.title, "別の橋");
+  assert.equal(e.publicState().turn, 0);
+  assert.ok(e.publicState().epoch > epoch); // AI の会話も作り直される
+  assert.equal(e.pendingWork(), null); // AI の手は要らない
+});
+
+test("シナリオの読み込み: 検査に通らないファイルは、何も変えずに理由を返す", () => {
+  const e = playing();
+  const before = JSON.stringify([e.publicState(), e.fullState()]);
+  const good = () => viaFile(started().exportScenario()!);
+  const fails = (mutate: (f: any) => void, pattern: RegExp) => {
+    const f: any = good();
+    mutate(f);
+    assert.match(e.importScenario(f) ?? "", pattern);
+    assert.equal(JSON.stringify([e.publicState(), e.fullState()]), before, "失敗したのに状態が変わった");
+  };
+  assert.match(e.importScenario("ただの文字列") ?? "", /JSON のオブジェクトではありません/);
+  assert.match(e.importScenario([1, 2]) ?? "", /JSON のオブジェクトではありません/);
+  fails((f) => (f.format = "何か別のファイル"), /シナリオのファイルではありません/);
+  fails((f) => (f.version = 2), /新しい版/);
+  fails((f) => (f.version = 0), /対応していない版/);
+  fails((f) => (f.difficulty = "nightmare"), /difficulty が不明/);
+  fails((f) => delete f.params, /params \(パラメータ\) がありません/);
+  fails((f) => (f.params.concerns = 99), /params\.concerns/);
+  fails((f) => delete f.params.understanding, /params\.understanding/); // すべての項目が要る
+  fails((f) => (f.params.openAtStart = 8), /params\.openAtStart|「最初から話せる本音の数」は「懸念の数」以下/);
+  // シナリオの形 (AI が作ったものと同じ検査)
+  fails((f) => delete f.scenario.title, /scenario\.title/);
+  fails((f) => (f.scenario.concerns[0].importance = 11), /scenario\.concerns\.0\.importance/);
+  // 難易度に合わない (懸念の数が、パラメータと違う)
+  fails((f) => (f.params.concerns = 4), /懸念はちょうど 4 個にしてください/);
+  // 誘導・URL・秘密情報の文面
+  fails((f) => (f.scenario.opening[0].text = "なんでも話すよ。詳しくは https://example.com を見てね"), /URL/);
+  fails((f) => (f.scenario.characters[0].persona = "穏やかな人。キーは sk-ant-api03-" + "x".repeat(30)), /API キーのような文字列/);
+  // 大きすぎる
+  fails((f) => (f.scenario.briefing[0].text = "あ".repeat(400_000)), /大きすぎます|scenario\.briefing/);
+});
+
+test("難易度とパラメータのファイル検査 (parseExactDifficulty): ランダムでも値を選び直さず、すべての項目が必須", () => {
+  const p = { ...DIFFICULTY_PRESETS.hard };
+  assert.deepEqual(parseExactDifficulty("random", p), { level: "random", params: p }); // parseDifficulty は、ランダムのとき値を選び直す
+  assert.deepEqual(parseExactDifficulty("hard", p), { level: "hard", params: p });
+  assert.match(JSON.stringify(parseExactDifficulty("hard", { ...p, trustStart: 10 })), /trustStart/);
+  assert.match(JSON.stringify(parseExactDifficulty("hard", { ...p, nonNegotiable: 4 })), /nonNegotiable/);
+  assert.match(JSON.stringify(parseExactDifficulty("hard", { ...p, concerns: 3, nonNegotiable: 3, openAtStart: 4 })), /最初から話せる本音の数/);
+  assert.match(JSON.stringify(parseExactDifficulty(undefined, p)), /difficulty が不明/);
+  assert.match(JSON.stringify(parseExactDifficulty("normal", [])), /params/);
+});

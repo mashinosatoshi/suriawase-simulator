@@ -71,7 +71,7 @@ function setup(script: Array<(input: TurnInput) => AssistantTurn> = []) {
   });
   backend.connect((s) => (state = s));
   const send = (action: Action, body?: Record<string, unknown>) => backend.send(action, body);
-  return { send, made, state: () => state! };
+  return { send, made, state: () => state!, exportScenario: () => backend.exportScenario() };
 }
 
 /** AI の処理 (非同期) が終わるのを待つ */
@@ -141,4 +141,33 @@ test("ブラウザ版: キーを消すと、そのサービスを使う AI の�
   assert.equal(state().ai.current, null);
   assert.equal(state().ai.label, "未設定");
   assert.match((await send("new", { request: "" })) ?? "", /AI が選ばれていません/);
+});
+
+test("ブラウザ版: シナリオの書き出しと読み込み (別の人が同じシナリオで遊ぶ)。読み込みにも AI の確定は要るが、AI は呼ばない", async () => {
+  const a = setup([() => call("start_scenario", scenario)]);
+  const none = await a.exportScenario();
+  assert.ok("error" in none && /書き出せるシナリオがありません/.test(none.error));
+  await a.send("ai/key", { provider: "gemini", key: GOOD_KEY });
+  await a.send("ai/select", { provider: "gemini" });
+  assert.equal(await a.send("new", { request: "橋の話", difficulty: "normal" }), null);
+  await until(() => a.state().phase === "player_turn");
+  const exported = await a.exportScenario();
+  assert.ok("file" in exported);
+  const file = JSON.parse(JSON.stringify((exported as { file: unknown }).file));
+  assert.equal(file.scenario.title, "橋の場所");
+
+  // 別の人 (別のページ): AI を確定する前は読み込めない
+  const b = setup([]);
+  assert.match((await b.send("import", { file })) ?? "", /AI が選ばれていません/);
+  await b.send("ai/key", { provider: "gemini", key: GOOD_KEY });
+  await b.send("ai/select", { provider: "gemini" });
+  b.made.length = 0;
+  assert.match((await b.send("import", { file: { format: "違う" } })) ?? "", /シナリオのファイルではありません/);
+  assert.equal(b.state().phase, "setup"); // 失敗しても何も変わらない
+  assert.equal(await b.send("import", { file }), null);
+  assert.equal(b.state().phase, "player_turn");
+  assert.equal(b.state().scenario?.title, "橋の場所");
+  assert.equal(b.state().turn, 0);
+  assert.deepEqual(b.made, []); // 読み込みでは AI を呼ばない
+  assert.ok(!JSON.stringify(b.state()).includes("resolved_when"));
 });

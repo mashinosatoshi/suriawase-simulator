@@ -44,6 +44,11 @@ async function publicState(): Promise<PublicState> {
   ctl.abort();
   return JSON.parse(buf.replace(/^data: /, "").trim());
 }
+/** POST して、状態コードと本文 (JSON) を受け取る */
+const postJson = async (path: string, body: unknown = {}) => {
+  const res = await fetch(BASE + path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  return { status: res.status, json: (await res.json().catch(() => null)) as any };
+};
 const rawStatus = (headers: Record<string, string>, path = "/api/new") =>
   new Promise<number>((resolve, reject) => {
     const req = request({ host: "127.0.0.1", port: PORT, path, method: "POST", headers }, (res) => (res.resume(), resolve(res.statusCode ?? 0)));
@@ -121,6 +126,11 @@ try {
   assert.equal(await rawStatus({ "Content-Type": "application/json", Origin: "http://evil.example" }), 403);
   assert.equal(await rawStatus({ "Content-Type": "application/json", Host: "evil.example" }), 403);
   step("他サイトの Origin / 不正な Host は 403");
+
+  // シナリオがまだ無い間は、書き出せない。ほかのサイトからの書き出し・読み込みも受け付けない
+  assert.equal((await postJson("/api/export")).status, 409);
+  assert.equal(await rawStatus({ "Content-Type": "application/json", Origin: "http://evil.example" }, "/api/export"), 403);
+  assert.equal(await rawStatus({ "Content-Type": "application/json", Origin: "http://evil.example" }, "/api/import"), 403);
 
   assert.equal(await post("/api/act", { text: "早すぎる" }), 409);
   assert.equal(await post("/api/new", { request: "町の書店の話", difficulty: "nightmare" }), 409);
@@ -248,6 +258,23 @@ try {
   const full = await call("get_state");
   assert.equal(full.scenario.concerns.length, 5);
   step("get_state は AI に隠し情報を含む全状態を返す");
+
+  // シナリオの書き出しと読み込み: 書き出したファイルは、会話の途中でも、同じシナリオで最初から遊べる。壊れたファイルは弾く
+  assert.equal(await post("/api/act", { text: "お店の調子はどう？" }), 204);
+  const exported = await postJson("/api/export");
+  assert.equal(exported.status, 200);
+  assert.deepEqual(Object.keys(exported.json).sort(), ["difficulty", "format", "params", "scenario", "version"]);
+  assert.equal(exported.json.scenario.title, "スモークテスト");
+  assert.ok(!JSON.stringify(exported.json).includes("お店の調子はどう")); // 会話は入らない
+  assert.equal((await postJson("/api/import", { file: { ...exported.json, format: "違う" } })).status, 409);
+  assert.equal((await publicState()).turn, 1); // 弾かれたら、何も変わらない
+  assert.equal((await postJson("/api/import", { file: exported.json })).status, 204);
+  const s4 = await publicState();
+  assert.equal(s4.phase, "player_turn");
+  assert.equal(s4.turn, 0);
+  assert.equal(s4.scenario?.title, "スモークテスト");
+  assert.ok(s4.epoch > s3.epoch);
+  step("シナリオを書き出して、読み込める (会話は引き継がず、壊れたファイルは弾く)");
 
   console.log("\nスモークテスト: すべて成功");
 } catch (e) {
