@@ -51,6 +51,20 @@ export function isTransientError(err: unknown): boolean {
   return Number.isNaN(status) && /Connection error|Failed to fetch|NetworkError|Load failed/i.test(detailOf(err));
 }
 
+const SECRET_LIKE = /AIza[\w-]{20,}|sk-[\w-]{20,}|([?&]key=)[^\s&"']+/g;
+const MAX_DETAIL_CHARS = 1000;
+
+/**
+ * 原因を調べる人向けに、エラーの中身 (HTTP の status と、API が返したエラーの本文) を 1 行にする。F12 のコンソールに出す用
+ * (画面に出す describeError は、短い説明だけ)。応答ヘッダーは含めない。キーに見える文字列は伏せ、長すぎる本文は切る
+ */
+export function errorDetail(err: unknown): string {
+  const status = statusOf(err);
+  const kind = err instanceof Error ? err.name : typeof err;
+  const body = detailOf(err).replace(/\s+/g, " ").replace(SECRET_LIKE, (_m, prefix) => `${prefix ?? ""}[伏せました]`);
+  return `${Number.isNaN(status) ? kind : `${kind} ${status}`}: ${body.length > MAX_DETAIL_CHARS ? `${body.slice(0, MAX_DETAIL_CHARS)}…` : body}`;
+}
+
 /** API のエラーを、画面に出せる短い説明にする (各社の SDK のエラーは HTTP の status を持つ) */
 export function describeError(err: unknown): string {
   const status = statusOf(err);

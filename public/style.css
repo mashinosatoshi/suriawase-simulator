@@ -120,6 +120,8 @@ aside { min-height: 0; overflow-y: auto; display: grid; gap: 14px; align-content
 .aipick label { display: grid; gap: 4px; }
 .aipick select { min-width: 160px; }
 .aipick input { flex: 1; min-width: 200px; font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; }
+.modelstep { display: grid; gap: 6px; }
+.effortnote { margin: 0; font-size: 12px; color: var(--muted); line-height: 1.5; }
 .aibox { display: grid; gap: 10px; font-size: 13px; color: var(--muted); }
 .aibox > label, .aibox .field { display: grid; gap: 4px; }
 .aibox > label select { justify-self: start; min-width: 220px; }

@@ -2,8 +2,8 @@
 // エンジンの「AI の仕事」(pendingWork) を見張り、ツール呼び出しで片付ける。ルールの検証はすべてエンジン任せ。
 import type { Engine, Work } from "./engine.js";
 import { BUILTIN_INSTRUCTIONS } from "./instructions.js";
-import { CATALOG, describeError, isTransientError, isValidModelId, PROVIDER_IDS, type AssistantTurn, type ChatSession, type LlmProvider, type ProviderId, type ToolCall, type ToolResult, type TurnInput } from "./llm/index.js";
-import type { AiStatus } from "./shared.js";
+import { CATALOG, describeError, errorDetail, isTransientError, isValidModelId, PROVIDER_IDS, type AssistantTurn, type ChatSession, type LlmProvider, type ProviderId, type ToolCall, type ToolResult, type TurnInput } from "./llm/index.js";
+import { isEffort, type AiStatus, type Effort } from "./shared.js";
 import { GAME_TOOLS, toolJsonSchema, type GameToolName } from "./tools.js";
 
 /** 1 つの仕事に使う API 呼び出しの上限。超えたら止めて、プレイヤーの「再試行」を待つ (際限なく課金しない) */
@@ -41,6 +41,8 @@ export interface GmOptions {
 export interface Selection {
   provider: ProviderId;
   model: string;
+  /** 思考レベル (上ほど読み違えにくいが、遅く、トークンも増える) */
+  effort: Effort;
 }
 
 /** API キーが入力済みか (キーそのものは GM には要らない。クライアントを作る makeProvider が持つ) */
@@ -87,7 +89,7 @@ export class BuiltinGm {
 
   constructor(
     private engine: Engine,
-    private makeProvider: (id: ProviderId) => LlmProvider,
+    private makeProvider: (id: ProviderId, effort: Effort) => LlmProvider,
     private keys: KeyState,
     /** null = まだ選ばれていない (起動直後は、どの API キーも入力されていない) */
     private selection: Selection | null,
@@ -104,7 +106,9 @@ export class BuiltinGm {
   select(sel: Selection): string | null {
     if (!this.keys.has(sel.provider)) return "その AI の API キーが設定されていません。キーを入力して「決定」を押してください";
     if (!isValidModelId(sel.model)) return "モデル ID の形式が正しくありません";
-    if (this.selection?.provider === sel.provider && this.selection.model === sel.model) return null; // 同じなら会話はそのまま
+    if (!isEffort(sel.effort)) return "思考レベルが正しくありません";
+    // 同じなら会話はそのまま (思考レベルだけが変わったときも、次の呼び出しから作り直す)
+    if (this.selection?.provider === sel.provider && this.selection.model === sel.model && this.selection.effort === sel.effort) return null;
     this.selection = { ...sel };
     this.session = null;
     this.setError(null, null);
@@ -187,7 +191,7 @@ export class BuiltinGm {
       (work.type === "new_game" && this.sessionKey !== key) ||
       (work.type === "player_action" && this.sessionTurns >= SESSION_TURNS);
     if (fresh) {
-      this.session = this.makeProvider(this.selection.provider).newSession({ system: BUILTIN_INSTRUCTIONS, tools: toolsFor(work), model: this.selection.model });
+      this.session = this.makeProvider(this.selection.provider, this.selection.effort).newSession({ system: BUILTIN_INSTRUCTIONS, tools: toolsFor(work), model: this.selection.model });
       this.sessionEpoch = this.engine.epoch;
       this.sessionKey = key;
       this.sessionKind = work.type;
@@ -215,7 +219,7 @@ export class BuiltinGm {
         this.pending = input.toolResults ?? [];
         // エラーの中身 (応答ヘッダーや、キーの一部を含むメッセージ) は出さず、説明だけをログに残す
         const message = describeError(err);
-        this.log(`AI の呼び出しに失敗: ${message}`);
+        this.log(`AI の呼び出しに失敗: ${message}\n  詳細: ${errorDetail(err)}`);
         return this.setError(key, message);
       }
       if (!turn) {
@@ -249,7 +253,7 @@ export class BuiltinGm {
         return this.setError(null, null);
       }
       lastProblem = results.filter((r) => r.isError).map((r) => r.content).join("\n");
-      this.log(`AI の返答を差し戻しました (${attempt}/${MAX_ATTEMPTS}): ${shorten(lastProblem.replace(/\s+/g, " "), 160)}`);
+      this.log(`AI の返答を差し戻しました (${attempt}/${MAX_ATTEMPTS}): ${shorten(lastProblem.replace(/\s+/g, " "), 1500)}`);
       input = { toolResults: results, ...(attempt + 1 === MAX_ATTEMPTS && work.type === "player_action" ? { text: LAST_TRY_NOTE } : {}) };
     }
 
@@ -273,7 +277,7 @@ export class BuiltinGm {
           this.setNotice(null);
           throw err;
         }
-        this.log(`AI の呼び出しに失敗 (${describeError(err)})。${wait / 1000} 秒待って自動で再試行します (${i + 1}/${this.retryDelays.length})`);
+        this.log(`AI の呼び出しに失敗 (${describeError(err)})。${wait / 1000} 秒待って自動で再試行します (${i + 1}/${this.retryDelays.length})\n  詳細: ${errorDetail(err)}`);
         this.setNotice(`AI が混み合っているようです。${Math.round(wait / 1000)} 秒待って、自動で再試行します (${i + 1}/${this.retryDelays.length})`);
         await this.sleep(wait);
         if (this.keyOf(this.engine.pendingWork()) !== key) {

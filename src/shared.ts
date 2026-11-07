@@ -209,6 +209,17 @@ export const secretInTextMessage = (kind: string) =>
 
 export type ProviderId = "anthropic" | "openai" | "gemini";
 
+/** AI の思考レベル。上ほど、相手の意図を読み違えにくくなるが、返答が遅くなり、使うトークン (料金・無料枠の消費) も増える */
+export type Effort = "low" | "medium" | "high";
+/** 弱い順。3 段階は、Claude・GPT・Gemini のどれも受け付ける */
+export const EFFORT_OPTIONS: Array<{ id: Effort; label: string }> = [
+  { id: "low", label: "Low" },
+  { id: "medium", label: "Medium" },
+  { id: "high", label: "High" },
+];
+export const DEFAULT_EFFORT: Effort = "medium";
+export const isEffort = (v: unknown): v is Effort => EFFORT_OPTIONS.some((o) => o.id === v);
+
 export interface AiProviderOption {
   id: ProviderId;
   label: string;
@@ -232,7 +243,7 @@ export interface AiStatus {
   connected: boolean;
   /** builtin: 選べる提供元すべて (キーが未設定のものも含む) */
   providers: AiProviderOption[];
-  current: { provider: ProviderId; model: string } | null;
+  current: { provider: ProviderId; model: string; effort: Effort } | null;
   /** AI の呼び出しに失敗して止まっているとき (再試行を待つ) */
   error: string | null;
   /** 一時的な失敗 (混雑・通信の乱れ) で、自動で再試行しているあいだの案内。止まってはいない */

@@ -6,7 +6,7 @@ import { BuiltinGm } from "./gm.js";
 import { CATALOG, checkKeyFormat, createProvider, describeError, isAuthError, PROVIDER_IDS, verifyKey, ApiKeys, type LlmProvider, type ProviderId } from "./llm/index.js";
 import { parseNewGame } from "./requests.js";
 import type { ScenarioFile } from "./scenario-file.js";
-import type { PublicState } from "./shared.js";
+import { DEFAULT_EFFORT, isEffort, type Effort, type PublicState } from "./shared.js";
 
 export type Action = "act" | "defer" | "new" | "replay" | "import" | "ai/retry" | "ai/select" | "ai/key" | "ai/forget";
 
@@ -20,13 +20,13 @@ export interface Backend {
 }
 
 interface LocalDeps {
-  makeProvider(id: ProviderId, apiKey: string | undefined): LlmProvider;
+  makeProvider(id: ProviderId, apiKey: string | undefined, effort: Effort): LlmProvider;
   verify(id: ProviderId, apiKey: string): Promise<void>;
   log(...a: unknown[]): void;
 }
 
 const defaultDeps: LocalDeps = {
-  makeProvider: (id, apiKey) => createProvider(id, { apiKey, effort: "medium" }),
+  makeProvider: (id, apiKey, effort) => createProvider(id, { apiKey, effort }),
   verify: verifyKey,
   log: (...a) => console.info(...a),
 };
@@ -37,7 +37,7 @@ export function createLocalBackend(deps: LocalDeps = defaultDeps): Backend {
   const keys = new ApiKeys();
   let listener: ((s: PublicState) => void) | null = null;
   const push = () => listener?.({ ...engine.publicState(), ai: gm.status() });
-  const gm = new BuiltinGm(engine, (id) => deps.makeProvider(id, keys.get(id)), keys, null, push, deps.log);
+  const gm = new BuiltinGm(engine, (id, effort) => deps.makeProvider(id, keys.get(id), effort), keys, null, push, deps.log);
   engine.onChange(push);
 
   const providerOf = (body: Record<string, unknown>) => (PROVIDER_IDS.includes(body.provider as ProviderId) ? (body.provider as ProviderId) : null);
@@ -78,7 +78,8 @@ export function createLocalBackend(deps: LocalDeps = defaultDeps): Backend {
       const provider = providerOf(b);
       if (!provider) return "不明な AI です";
       const model = typeof b.model === "string" && b.model.trim() ? b.model.trim() : CATALOG[provider].defaultModel;
-      const error = gm.select({ provider, model });
+      if (b.effort !== undefined && !isEffort(b.effort)) return "思考レベルが正しくありません";
+      const error = gm.select({ provider, model, effort: b.effort ?? DEFAULT_EFFORT });
       if (!error) push();
       return error;
     },

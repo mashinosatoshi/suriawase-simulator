@@ -1,10 +1,9 @@
 // 各社の LLM API を同じ形で扱うための最小限の型。会話の履歴は各社の形式のまま、セッションの中に持つ
 // (Claude の thinking ブロック、OpenAI の reasoning アイテム、Gemini の thought signature を、そのまま返し直すため)。
 
-import type { ProviderId } from "../shared.js";
+import type { Effort, ProviderId } from "../shared.js";
 
-export type { ProviderId };
-export type Effort = "low" | "medium" | "high";
+export type { Effort, ProviderId };
 
 export interface ToolSpec {
   name: string;

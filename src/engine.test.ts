@@ -692,6 +692,17 @@ test("全部解消した完全合意でも振り返りは書く (助言は不要
   assert.equal(e.publicState().review?.concerns.length, 0);
 });
 
+test("id の形式が違うときは、AI が書いた値を差し戻しの文に入れる (どこが違反か分かるように)", () => {
+  const e = new Engine();
+  const bad = scenario();
+  bad.concerns[0].id = "budget_anxiety_of_the_mayor"; // 長すぎる
+  bad.concerns[1].id = "C2"; // 大文字
+  const msg = errorsOf(e.startScenario(bad));
+  assert.match(msg, /concerns\.0\.id: .*16文字以内.*"budget_anxiety_of_the_mayor"/);
+  assert.match(msg, /concerns\.1\.id: .*"C2"/);
+  assert.equal(e.phase, "setup");
+});
+
 // ---- 口調と、誘導する描写の検出 -------------------------------------------------
 
 test("シナリオには口調 (speech / sample_lines) が要る", () => {

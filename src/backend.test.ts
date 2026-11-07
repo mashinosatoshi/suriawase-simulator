@@ -51,10 +51,12 @@ async function fakeVerify(_id: ProviderId, key: string) {
 
 function setup(script: Array<(input: TurnInput) => AssistantTurn> = []) {
   const made: Array<{ id: ProviderId; apiKey?: string }> = [];
+  const efforts: string[] = [];
   let state: PublicState | null = null;
   const backend = createLocalBackend({
-    makeProvider: (id, apiKey) => {
+    makeProvider: (id, apiKey, effort) => {
       made.push({ id, apiKey });
+      efforts.push(effort);
       return {
         id,
         newSession: () => ({
@@ -71,7 +73,7 @@ function setup(script: Array<(input: TurnInput) => AssistantTurn> = []) {
   });
   backend.connect((s) => (state = s));
   const send = (action: Action, body?: Record<string, unknown>) => backend.send(action, body);
-  return { send, made, state: () => state!, exportScenario: () => backend.exportScenario() };
+  return { send, made, efforts, state: () => state!, exportScenario: () => backend.exportScenario() };
 }
 
 /** AI の処理 (非同期) が終わるのを待つ */
@@ -102,8 +104,22 @@ test("ブラウザ版: 起動直後は AI 未設定。キーは確かめてか�
 
   assert.match((await send("ai/select", { provider: "openai", model: "gpt-6-luna" })) ?? "", /API キー/);
   assert.equal(await send("ai/select", { provider: "gemini" }), null);
-  assert.deepEqual(state().ai.current, { provider: "gemini", model: "gemini-3.5-flash-lite" });
+  assert.deepEqual(state().ai.current, { provider: "gemini", model: "gemini-3.5-flash-lite", effort: "medium" });
   assert.equal(state().ai.label, "Gemini 3.5 Flash-Lite");
+});
+
+test("ブラウザ版: 思考レベルを選べる。選んだレベルで AI を呼び、状態に出る。指定が無ければ Medium、おかしな値は断る", async () => {
+  const { send, state, efforts } = setup([() => call("start_scenario", scenario)]);
+  await send("ai/key", { provider: "gemini", key: GOOD_KEY });
+  assert.match((await send("ai/select", { provider: "gemini", effort: "deepest" })) ?? "", /思考レベルが正しくありません/);
+  assert.equal(state().ai.current, null); // 断られたら、選択は変わらない
+  assert.equal(await send("ai/select", { provider: "gemini", effort: "high" }), null);
+  assert.deepEqual(state().ai.current, { provider: "gemini", model: "gemini-3.5-flash-lite", effort: "high" });
+  await send("new", { request: "" });
+  await until(() => state().phase === "player_turn");
+  assert.deepEqual(efforts, ["high"]); // 選んだレベルで AI を呼んでいる
+  assert.equal(await send("ai/select", { provider: "gemini" }), null); // 指定が無ければ Medium に戻る
+  assert.equal(state().ai.current?.effort, "medium");
 });
 
 test("ブラウザ版: 新しいゲームを AI が作り、入力したキーで AI を呼ぶ。発言・やり直しもできる", async () => {

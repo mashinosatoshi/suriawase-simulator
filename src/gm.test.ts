@@ -78,14 +78,15 @@ class FakeProvider implements LlmProvider {
  * 既定では Claude と GPT のキーが入力済みの状態 (キーの値は作り物)。自動の再試行は既定ではしない (する試験だけ options で渡す)。
  * scripts は会話 (セッション) ごとの台本: 新しいゲーム・プレイヤーの手番 (SESSION_TURNS ごと)・振り返りは、それぞれ別の会話になる
  */
-function setup(scripts: Step[][], { withKeys = ["anthropic", "openai"] as ProviderId[], selection = { provider: "anthropic", model: "claude-opus-5-5" } as Selection | null, options = { retryDelaysMs: [] } as GmOptions } = {}) {
+function setup(scripts: Step[][], { withKeys = ["anthropic", "openai"] as ProviderId[], selection = { provider: "anthropic", model: "claude-opus-5-5", effort: "medium" } as Selection | null, options = { retryDelaysMs: [] } as GmOptions } = {}) {
   const engine = new Engine();
   const provider = new FakeProvider("anthropic", scripts);
   const keys = new ApiKeys();
   for (const id of withKeys) keys.set(id, `test-key-${id}`);
   let statusChanges = 0;
-  const gm = new BuiltinGm(engine, () => provider, keys, selection, () => statusChanges++, undefined, options);
-  return { engine, provider, gm, keys, statusChanges: () => statusChanges };
+  const logs: string[] = [];
+  const gm = new BuiltinGm(engine, () => provider, keys, selection, () => statusChanges++, (...a) => void logs.push(a.join(" ")), options);
+  return { engine, provider, gm, keys, logs, statusChanges: () => statusChanges };
 }
 
 test("新しいゲーム → AI がシナリオを作り、プレイヤーの手番になる", async () => {
@@ -324,19 +325,49 @@ test("応答を待つ間に最初からやり直されたら、古い会話は�
   assert.match(provider.sessions[2].inputs[0].text ?? "", /進行中のゲームです/);
 });
 
+test("思考レベルだけを変えても、次の呼び出しから新しいレベルで会話を作り直す / 同じ選択のままなら会話は続く / おかしな値は断る", async () => {
+  const engine = new Engine();
+  const provider = new FakeProvider("anthropic", [[() => call("start_scenario", scenario)], [() => reply(1), () => reply(2)], [() => reply(3)]]);
+  const efforts: string[] = [];
+  const keys = new ApiKeys();
+  keys.set("anthropic", "test-key-anthropic");
+  const gm = new BuiltinGm(engine, (_id, effort) => (efforts.push(effort), provider), keys, { provider: "anthropic", model: "claude-opus-5-5", effort: "medium" }, () => {});
+  const same = { provider: "anthropic", model: "claude-opus-5-5" } as const;
+  engine.requestNewGame("");
+  await gm.tick();
+  engine.act({ text: "こんにちは" });
+  await gm.tick();
+  assert.deepEqual(efforts, ["medium", "medium"]); // シナリオを作る会話と、手番の会話
+
+  assert.equal(gm.select({ ...same, effort: "medium" }), null); // 同じ選択: 会話はそのまま
+  engine.act({ text: "続けます" });
+  await gm.tick();
+  assert.deepEqual(efforts, ["medium", "medium"]);
+
+  assert.match(gm.select({ ...same, effort: "deepest" as never }) ?? "", /思考レベル/); // 断られたら、選択は変わらない
+  assert.equal(gm.status().current?.effort, "medium");
+
+  assert.equal(gm.select({ ...same, effort: "high" }), null); // レベルだけ変える
+  assert.equal(gm.status().current?.effort, "high");
+  engine.act({ text: "もう一度" });
+  await gm.tick();
+  assert.deepEqual(efforts, ["medium", "medium", "high"]); // 次の呼び出しから、新しいレベルの会話
+  assert.equal(provider.sessions.length, 3);
+});
+
 test("AI の選択: 使えない提供元やおかしなモデル ID は拒否 / 状態に選択肢と現在の選択が出る", () => {
   const { gm } = setup([]);
-  assert.match(gm.select({ provider: "gemini", model: "gemini-4-argon" }) ?? "", /API キー/);
-  assert.match(gm.select({ provider: "openai", model: "bad model id!" }) ?? "", /形式/);
-  assert.equal(gm.select({ provider: "openai", model: "gpt-6.1-sol" }), null);
+  assert.match(gm.select({ provider: "gemini", model: "gemini-4-argon", effort: "medium" }) ?? "", /API キー/);
+  assert.match(gm.select({ provider: "openai", model: "bad model id!", effort: "medium" }) ?? "", /形式/);
+  assert.equal(gm.select({ provider: "openai", model: "gpt-6.1-sol", effort: "medium" }), null);
   const st = gm.status();
   assert.equal(st.mode, "builtin");
-  assert.deepEqual(st.current, { provider: "openai", model: "gpt-6.1-sol" });
+  assert.deepEqual(st.current, { provider: "openai", model: "gpt-6.1-sol", effort: "medium" });
   assert.equal(st.label, "GPT-6.1 Sol");
   // 提供元はキーの有無にかかわらず全部出す。キーそのものは出さず、入力済みかどうかだけ
   assert.deepEqual(st.providers.map((p) => [p.id, p.hasKey]), [["anthropic", true], ["openai", true], ["gemini", false]]);
   assert.ok(!JSON.stringify(st).includes("test-key"), "API キーが状態に含まれている");
-  assert.equal(gm.select({ provider: "anthropic", model: "claude-custom-1" }), null);
+  assert.equal(gm.select({ provider: "anthropic", model: "claude-custom-1", effort: "medium" }), null);
   assert.equal(gm.status().label, "Claude (Anthropic) · claude-custom-1");
 });
 
@@ -347,7 +378,7 @@ test("起動直後はキーが無く未設定。キーが入力されると、�
   assert.equal(st.connected, false);
   assert.equal(st.current, null);
   assert.ok(st.providers.every((p) => !p.hasKey));
-  assert.match(gm.select({ provider: "gemini", model: "gemini-3.5-flash-lite" }) ?? "", /API キー/);
+  assert.match(gm.select({ provider: "gemini", model: "gemini-3.5-flash-lite", effort: "medium" }) ?? "", /API キー/);
   // 選ばれる前に新しいゲームの依頼が来ても、API は呼ばずに知らせる
   engine.requestNewGame("");
   await gm.tick();
@@ -356,7 +387,7 @@ test("起動直後はキーが無く未設定。キーが入力されると、�
 
   keys.set("gemini", "test-key-g");
   assert.equal(gm.status().providers.find((p) => p.id === "gemini")?.hasKey, true);
-  assert.equal(gm.select({ provider: "gemini", model: "gemini-3.5-flash-lite" }), null);
+  assert.equal(gm.select({ provider: "gemini", model: "gemini-3.5-flash-lite", effort: "medium" }), null);
   engine.requestNewGame("");
   await gm.tick();
   assert.equal(engine.phase, "player_turn");
@@ -406,7 +437,7 @@ test("対話の途中で AI を変えると、新しいモデルが会話の最�
   assert.ok(gm.status().error); // 前の AI は利用上限で止まった
   assert.ok(!JSON.stringify(engine.fullState()).includes("最初に予算"), "ふだんの全状態は直近の会話だけ");
 
-  assert.equal(gm.select({ provider: "openai", model: "gpt-6.1-sol" }), null);
+  assert.equal(gm.select({ provider: "openai", model: "gpt-6.1-sol", effort: "medium" }), null);
   assert.equal(gm.status().error, null);
   gm.retry(); // 画面は、AI を変えたら止まっていた返答を再試行する
   await gm.tick();
@@ -506,6 +537,20 @@ test("自動で再試行しても直らなければ止まって知らせる / �
   await b.gm.tick();
   assert.deepEqual(waits, []);
   assert.match(b.gm.status().error ?? "", /API キーが無効/);
+});
+
+test("AI の呼び出しが失敗したら、API が返したエラーの本文をログ (F12 のコンソール) に残す。画面には短い説明だけ", async () => {
+  const body = '{"error":{"code":503,"message":"This model is currently experiencing high demand.","status":"UNAVAILABLE"}}';
+  const down = () => apiError(503, body);
+  const { engine, gm, logs } = setup([[down, down]], { options: { retryDelaysMs: [1000], sleep: async () => {} } });
+  engine.requestNewGame("");
+  await gm.tick();
+  assert.match(gm.status().error ?? "", /AI のサービス側でエラー.*503/);
+  assert.ok(!(gm.status().error ?? "").includes("high demand")); // 画面には本文を出さない
+  // 自動で再試行するときと、あきらめて止まるときの両方で、本文が残る
+  const withBody = logs.filter((l) => l.includes("詳細: Error 503:") && l.includes("high demand") && l.includes('"status":"UNAVAILABLE"'));
+  assert.equal(withBody.length, 2, logs.join("\n"));
+  assert.match(withBody[0], /自動で再試行します/);
 });
 
 test("自動で再試行を待つあいだに最初からやり直されたら、古い会話は捨てて待たずに終える", async () => {
