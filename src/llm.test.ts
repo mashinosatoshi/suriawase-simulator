@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { anthropicProvider, echoable, verifyAnthropicKey } from "./llm/anthropic.js";
-import { ApiKeys, checkKeyFormat, describeError, isAuthError } from "./llm/index.js";
+import { ApiKeys, checkKeyFormat, describeError, errorDetail, isAuthError } from "./llm/index.js";
 import { geminiProvider } from "./llm/gemini.js";
 import { openAiProvider } from "./llm/openai.js";
 import type { SessionOptions } from "./llm/types.js";
@@ -213,6 +213,27 @@ test("API のエラーを、画面に出せる短い説明にする", () => {
   // キーの誤りかどうか (開始画面でキーを確かめるときに使う)
   assert.ok(isAuthError(err(401)) && isAuthError(err(403)) && isAuthError(gemini));
   assert.ok(!isAuthError(err(429)) && !isAuthError(credit) && !isAuthError(new Error("ECONNREFUSED")));
+});
+
+test("原因調べ用のエラーの詳細: status と API が返した本文を 1 行で出し、キーに見える文字列は伏せ、長すぎれば切る", () => {
+  const body = '{"error":{"code":503,"message":"The model is overloaded. Please try again later.","status":"UNAVAILABLE"}}';
+  const err = Object.assign(new Error(body), { status: 503 });
+  const detail = errorDetail(err);
+  assert.match(detail, /^Error 503: /);
+  assert.ok(detail.includes("The model is overloaded") && detail.includes('"status":"UNAVAILABLE"'));
+  // 改行は 1 行にまとめる
+  assert.ok(!errorDetail(Object.assign(new Error("a\n  b\n"), { status: 500 })).includes("\n"));
+  // status が無いエラー (通信の失敗など) は、種類だけ
+  assert.equal(errorDetail(new TypeError("Failed to fetch")), "TypeError: Failed to fetch");
+  assert.equal(errorDetail("oops"), "string: oops");
+  // キーに見える文字列は、本文に混ざっていても出さない
+  const leaky = Object.assign(new Error('bad key AIzaSyA1234567890abcdefghijklmnop / sk-ant-api03-abcdefghijklmnopqrstuvwxyz / https://x.test/v1?key=SECRET123&alt=json'), { status: 400 });
+  const safe = errorDetail(leaky);
+  assert.ok(!/AIzaSyA1234|sk-ant-api03|SECRET123/.test(safe), safe);
+  assert.ok(safe.includes("?key=[伏せました]&alt=json"));
+  // 長すぎる本文は切る
+  const long = errorDetail(Object.assign(new Error("x".repeat(5000)), { status: 502 }));
+  assert.ok(long.length < 1100 && long.endsWith("…"));
 });
 
 test("API キーの置き場所: 入力されたキーだけを持つ (環境変数のキーは読まない)", () => {

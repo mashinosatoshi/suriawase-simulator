@@ -71,7 +71,7 @@ async function playGame(index: number, o: Options, providers: Providers, keys: A
     // エンジンの審査で弾かれたものだけを数える (呼び出しの失敗は、止まった理由として別に残る)
     if (/差し戻し/.test(message)) rejections.push({ turn: engine.publicState().turn, message });
   };
-  const gm = new BuiltinGm(engine, () => providers.gm, keys, { provider: o.gm.provider, model: o.gm.model }, () => {}, log);
+  const gm = new BuiltinGm(engine, () => providers.gm, keys, { provider: o.gm.provider, model: o.gm.model, effort: o.gm.effort }, () => {}, log);
   const record: GameRecord = { index, title: "(シナリオなし)", theme, style: style.label, turns: turnPlanText(plan), difficulty, scenario: null, transcript: [], ending: null, review: null, rejections, error: null, judge: null, judgeError: null };
   const step = (text: string) => process.stdout.write(`\r  ${text}`.padEnd(60));
 

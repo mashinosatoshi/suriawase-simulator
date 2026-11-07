@@ -9,7 +9,10 @@ export const MAX_TRUST_STEP = 2;
 // ---- シナリオ (AI が生成する) ---------------------------------------------
 // 「AI専用」の項目はブラウザに送られない。解消条件 (resolved_when) は開始時に確定し、以後 AI も変更できない。
 
-const id = z.string().regex(/^[a-z][a-z0-9_]{0,15}$/, "英小文字で始まる英数字/アンダースコア 16文字以内");
+// 差し戻しの文に、AI が実際に書いた値を入れる (規則だけだと、どこが違反か分からず、同じ書き方を繰り返すモデルがいる)
+const id = z.string().regex(/^[a-z][a-z0-9_]{0,15}$/, {
+  error: (iss) => `英小文字で始まる英数字/アンダースコア 16文字以内 (受け取った値: ${JSON.stringify(String(iss.input).slice(0, 40))})`,
+});
 
 export const characterSchema = z.object({
   id: id.describe("キャラクター識別子 (例: mayor)。'narrator' は使えない"),
@@ -52,7 +55,7 @@ export const characterSchema = z.object({
 });
 
 export const concernSchema = z.object({
-  id: id.describe("懸念の識別子 (例: c1)"),
+  id: id.describe("懸念の識別子。c1, c2, c3 のように、c と連番にする (内容を表す長い名前、大文字、ハイフン、日本語は不可)"),
   owner: id.describe("この懸念を持つキャラクターの id"),
   category: z.string().min(1).max(8).describe("懸念ボードに載るタグ。本音が見つかるまでプレイヤーには見えない (例: お金 / 時間 / 気持ち / 周囲への影響)"),
   text: z.string().min(6).max(120).describe("本当の懸念を一文で。発見されるまで非公開"),

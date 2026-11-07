@@ -3,9 +3,11 @@ import { createLocalBackend, createRemoteBackend, type Action, type Backend } fr
 import { encryptScenarioFile, MAX_KEY_CHARS, normalizeKey, openScenarioFile, ScenarioFileError, ScenarioKeyRequired } from "./scenario-crypto.js";
 import {
   DEFAULT_DIFFICULTY,
+  DEFAULT_EFFORT,
   DIFFICULTIES,
   DIFFICULTY_INFO,
   DIFFICULTY_PRESETS,
+  EFFORT_OPTIONS,
   IMPORTANCE_LEVEL_NAMES,
   levelBand,
   NON_NEGOTIABLE,
@@ -18,6 +20,7 @@ import {
   ENDING_LABELS,
   STATUS_LABELS,
   type AiProviderOption,
+  type AiStatus,
   type Difficulty,
   type DifficultyParams,
   type LogLine,
@@ -313,6 +316,13 @@ function openAiSetup() {
 
 const OTHER_MODEL = "__other__";
 
+/** ヘッダーなどに出す AI の名前。思考レベルが既定 (Medium) 以外のときは、添えて見せる */
+function aiText(ai: AiStatus) {
+  const effort = ai.current?.effort;
+  if (!effort || effort === DEFAULT_EFFORT) return ai.label;
+  return `${ai.label}・思考 ${EFFORT_OPTIONS.find((o) => o.id === effort)?.label ?? effort}`;
+}
+
 /** プライバシーポリシー・利用規約へのリンク。対話とキーはこのページの中にしかないので、別のタブで開く */
 const policyLink = (text: string, href: string) => h("a", { href, target: "_blank", rel: "noopener noreferrer" }, text);
 
@@ -367,7 +377,15 @@ function aiPicker(s: PublicState, onReady: (ready: boolean) => void) {
   // モデル: キーが確かめられてから選べる
   const model = h("select", { "aria-label": "モデル" });
   const custom = h("input", { type: "text", maxlength: 100, placeholder: "モデル ID を入力 (例: claude-opus-5-5)", "aria-label": "モデル ID" });
-  const modelStep = h("div", { class: "aipick" }, h("label", {}, "モデル", model), custom);
+  // 思考レベル: 上ほど、相手の意図を読み違えにくいが、遅く、トークンも増える。軽いモデルで読み違えが目立つときに上げる
+  const effort = h("select", { "aria-label": "思考レベル" }, ...EFFORT_OPTIONS.map((o) => h("option", { value: o.id }, o.label)));
+  effort.value = ai.current?.effort ?? DEFAULT_EFFORT;
+  const modelStep = h(
+    "div",
+    { class: "modelstep" },
+    h("div", { class: "aipick" }, h("label", {}, "モデル", model), custom, h("label", {}, "思考レベル", effort)),
+    h("p", { class: "effortnote" }, "高いほど、相手の意図を読み違えにくくなりますが、返答が遅くなり、使うトークン (料金・無料枠の消費) も増えます。軽いモデルで会話が噛み合わないときに上げてみてください。"),
+  );
   const fillModels = (id: string, wanted?: string) => {
     const p = providerOf(id);
     model.replaceChildren(...p.models.map((m) => h("option", { value: m.id }, m.label)), h("option", { value: OTHER_MODEL }, "その他 (ID を入力)"));
@@ -462,7 +480,7 @@ function aiPicker(s: PublicState, onReady: (ready: boolean) => void) {
   return {
     el: h("div", { class: "aibox" }, h("label", {}, "AI サービス", provider), h("div", { class: "field" }, h("span", {}, "API キー"), keyEntry, keyDone), modelStep),
     ready,
-    value: () => ({ provider: provider.value, model: model.value === OTHER_MODEL ? custom.value.trim() : model.value }),
+    value: () => ({ provider: provider.value, model: model.value === OTHER_MODEL ? custom.value.trim() : model.value, effort: effort.value }),
   };
 }
 
@@ -643,7 +661,7 @@ function storyDialog(s: PublicState) {
       params.el,
     ),
     importRow(),
-    s.ai.mode === "builtin" && h("div", { class: "aisum" }, h("span", {}, `AI: ${s.ai.label}`), h("button", { type: "button", onclick: () => ((aiSetupOpen = true), render()) }, "変更")),
+    s.ai.mode === "builtin" && h("div", { class: "aisum" }, h("span", {}, `AI: ${aiText(s.ai)}`), h("button", { type: "button", onclick: () => ((aiSetupOpen = true), render()) }, "変更")),
     aiHint(s),
     h(
       "div",
@@ -1137,7 +1155,7 @@ function render() {
   }
 
   const ai = $("ai");
-  ai.textContent = `AI: ${s.ai.label}`;
+  ai.textContent = `AI: ${aiText(s.ai)}`;
   ai.className = `chip ${s.ai.connected ? "on" : "off"}`;
   // 対話の途中でも AI を変えられる (内蔵 GM のとき。MCP 版の AI は Claude Code 側で決まる)
   $("aichange").hidden = s.ai.mode !== "builtin";
